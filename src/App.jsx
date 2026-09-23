@@ -1,12 +1,15 @@
 import React from 'react';
+// CreatorCode scaffold – App entry point
+import SimulationCanvas from './components/SimulationCanvas';
 
+/**
+ * App – root component for the Mars EDL Simulator.
+ *
+ * Phase 1: 3-DoF physics simulation active.
+ * Renders the physics-connected 3D Mars scene.
+ */
 function App() {
-  return (
-    <div style={{ textAlign: 'center', padding: '50px' }}>
-      <h1>Welcome to MyProject!</h1>
-      <p>Scaffolded using CreatorCode (powered by Vite)</p>
-    </div>
-  );
+  return <SimulationCanvas />;
 }
 
 export default App;
