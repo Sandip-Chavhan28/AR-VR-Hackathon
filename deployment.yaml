@@ -1,0 +1,19 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: marslanding2-react
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: marslanding2-react
+  template:
+    metadata:
+      labels:
+        app: marslanding2-react
+    spec:
+      containers:
+      - name: web
+        image: nginx:alpine
+        ports:
+        - containerPort: 80
