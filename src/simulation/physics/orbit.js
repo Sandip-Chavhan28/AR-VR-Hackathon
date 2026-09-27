@@ -70,6 +70,10 @@ export function getCircularOrbitalSpeed(altitude = ORBIT_ALTITUDE) {
 // 2. Central Mars Gravity
 // ---------------------------------------------------------------------------
 
+// Preallocated scratch vectors for zero heap GC churn
+const _scratchGravity = { ax: 0, ay: 0, az: 0 };
+const _scratchThrust  = { fx: 0, fy: 0, fz: 0 };
+
 /**
  * Central Mars gravitational acceleration vector:
  *   a_gravity = -mu / r³ * r_vec
@@ -81,25 +85,27 @@ export function getCircularOrbitalSpeed(altitude = ORBIT_ALTITUDE) {
  * @param {number} z
  * @returns {{ ax: number, ay: number, az: number }} Acceleration components in m/s².
  */
-export function centralGravityAcceleration(x, y, z) {
+export function centralGravityAcceleration(x, y, z, out = null) {
   const rx = x;
   const ry = y + MARS_RADIUS;
   const rz = z;
   const r2 = rx * rx + ry * ry + rz * rz;
   const r = Math.sqrt(r2);
+  const target = out || { ax: 0, ay: 0, az: 0 };
 
   if (r < 1e-6) {
-    return { ax: 0, ay: 0, az: 0 };
+    target.ax = 0;
+    target.ay = 0;
+    target.az = 0;
+    return target;
   }
 
   // -mu / r³
   const factor = -MARS_MU / (r2 * r);
-
-  return {
-    ax: factor * rx,
-    ay: factor * ry,
-    az: factor * rz,
-  };
+  target.ax = factor * rx;
+  target.ay = factor * ry;
+  target.az = factor * rz;
+  return target;
 }
 
 // ---------------------------------------------------------------------------
@@ -116,20 +122,25 @@ export function centralGravityAcceleration(x, y, z) {
  * @param {number} vy Velocity Y (m/s)
  * @param {number} vz Velocity Z (m/s)
  * @param {number} [thrust] Engine thrust in Newtons (defaults to DEORBIT_THRUST)
+ * @param {object} [out] Optional reusable target object
  * @returns {{ fx: number, fy: number, fz: number }} Thrust force vector in N.
  */
-export function computeDeorbitThrust(vx, vy, vz, thrust = DEORBIT_THRUST) {
+export function computeDeorbitThrust(vx, vy, vz, thrust = DEORBIT_THRUST, out = null) {
   const speed = Math.sqrt(vx * vx + vy * vy + vz * vz);
+  const target = out || { fx: 0, fy: 0, fz: 0 };
+
   if (speed < 1e-6) {
-    return { fx: 0, fy: 0, fz: 0 };
+    target.fx = 0;
+    target.fy = 0;
+    target.fz = 0;
+    return target;
   }
 
   const invSpeed = 1.0 / speed;
-  return {
-    fx: -thrust * (vx * invSpeed),
-    fy: -thrust * (vy * invSpeed),
-    fz: -thrust * (vz * invSpeed),
-  };
+  target.fx = -thrust * (vx * invSpeed);
+  target.fy = -thrust * (vy * invSpeed);
+  target.fz = -thrust * (vz * invSpeed);
+  return target;
 }
 
 /**

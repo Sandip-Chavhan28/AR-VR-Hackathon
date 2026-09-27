@@ -39,10 +39,12 @@ import {
 
 import {
   getTerrainHeight,
+  getMolaTerrainHeight,
   getTerrainSlope,
   getCraterRisk,
   getObstacleRisk,
   getHazardClearance,
+  getTerrainSourceInfo,
   CRATERS,
   OBSTACLES,
 } from '../src/simulation/landingSite/terrain.js';
@@ -77,6 +79,19 @@ function approxEqual(a, b, tol = 1e-4, msg = '') {
 
 console.log('\n── 1. Terrain Function & Determinism ───────────');
 
+test('NASA MOLA tile is loaded, georeferenced, and anchor-normalized', () => {
+  const info = getTerrainSourceInfo();
+  assert.strictEqual(info.source, 'NASA MOLA');
+  assert.strictEqual(info.loaded, true);
+  assert.strictEqual(info.columns, 283);
+  assert.strictEqual(info.rows, 283);
+  assert.strictEqual(info.samples, 80089);
+  assert(info.minimumMeters < -3000 && info.maximumMeters < 0, 'MOLA elevations should contain measured Jezero topography');
+  approxEqual(getMolaTerrainHeight(0, 0), 0, 1e-8, 'Jezero anchor-relative MOLA height');
+  assert.notStrictEqual(getMolaTerrainHeight(30000, 30000), null, 'Nearby local coordinates should sample the MOLA crop');
+  assert.strictEqual(getMolaTerrainHeight(200000, 200000), null, 'Out-of-crop coordinates should use deterministic fallback');
+});
+
 test('1. Terrain function is deterministic across separate calls', () => {
   const h1 = getTerrainHeight(28.0, 16.0);
   const h2 = getTerrainHeight(28.0, 16.0);
@@ -100,16 +115,14 @@ test('2. Same coordinates return same elevation', () => {
 test('3. Terrain changes across the analysis area', () => {
   const hCenter = getTerrainHeight(0, 0);
   const hCrater = getTerrainHeight(24, 15); // near Crater Alpha center
-  const hRidge = getTerrainHeight(50, 45);  // near Rocky Ridge
+  const molaFar = getMolaTerrainHeight(10000, 10000);
 
   assert(
     Math.abs(hCrater - hCenter) > 2.0,
     `Crater elevation (${hCrater}) should differ noticeably from center (${hCenter})`
   );
-  assert(
-    Math.abs(hRidge - hCenter) > 1.0,
-    `Ridge elevation (${hRidge}) should differ from center (${hCenter})`
-  );
+  assert.notStrictEqual(molaFar, null, 'Regional MOLA sample should be inside Jezero crop');
+  assert(Math.abs(molaFar - getMolaTerrainHeight(0, 0)) > 20, 'MOLA large-scale elevation should vary across the landing region');
 });
 
 console.log('\n── 2. Slope Calculation ────────────────────────');

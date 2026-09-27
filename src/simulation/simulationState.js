@@ -29,6 +29,10 @@ import {
   PARACHUTE_DEPLOY_ALTITUDE,
   PARACHUTE_DEPLOY_MAX_SPEED,
   PARACHUTE_DEPLOY_MIN_DENSITY,
+  BACKSHELL_SEP_ALTITUDE,
+  TERMINAL_POWERED_ALTITUDE,
+  JEZERO_TARGET_X,
+  JEZERO_TARGET_Z,
 } from './physics/constants.js';
 import { atmosphericDensity } from './physics/atmosphere.js';
 import { stepSimulation } from './physics/integrator.js';
@@ -121,33 +125,32 @@ export function determinePhase(state) {
       return 'ATMOSPHERIC_ENTRY';
 
     case 'PARACHUTE_DESCENT': {
-      // Run landing-site analysis exactly once
-      if (!state.landingSiteAnalysis) {
-        state.landingSiteAnalysis = performLandingSiteAnalysis(state.initialPlannedTarget || INITIAL_PLANNED_TARGET);
-        state.landingSiteAnalysis.analyzedAtAltitude = state.altitude;
-        state.landingSiteAnalysis.analyzedAtTime = state.elapsed;
-      }
-
       if (state.altitude <= GROUND_ALTITUDE || state.grounded) {
         return 'LANDED';
       }
-
-      // If initial target is UNSAFE, arm guidance and transition immediately
-      const lsa = state.landingSiteAnalysis;
-      if (lsa && lsa.initialTargetStatus === 'UNSAFE' && lsa.selectedTarget) {
-        // Store guidance reference coordinates once (global physics coords at this moment)
-        if (state.guidanceRefX === undefined) {
-          state.guidanceRefX = state.x;
-          state.guidanceRefZ = state.z;
-          // Mission control log entries
-          lsa.decisionLog.push('[MC] INITIAL LANDING SITE UNSAFE — AUTONOMOUS REDIRECT REQUIRED');
-          lsa.decisionLog.push(
-            `[MC] SAFE TARGET LOCKED: (${lsa.selectedTarget.x.toFixed(0)}m, ${lsa.selectedTarget.z.toFixed(0)}m) — Score: ${lsa.selectedTarget.safetyScore.toFixed(1)}`
-          );
-          lsa.decisionLog.push('[MC] AUTONOMOUS TRAJECTORY CORRECTION INITIATED');
-          state._lastDistLogTime = state.elapsed;
+      if (state.altitude <= BACKSHELL_SEP_ALTITUDE || state.backshellSeparated) {
+        if (!state.enginesActive && (state.phase === 'BACKSHELL_SEP' || state.altitude > 1650)) {
+          return 'BACKSHELL_SEP';
         }
-        return 'AUTONOMOUS_TARGET_REALIGNMENT';
+        return 'POWERED_DESCENT';
+      }
+
+      // TRN / Hazard analysis realignment phase when optical tracking activates at ~2.5 km
+      if (state.altitude <= 2500 || state.trnActive) {
+        state.trnActive = true;
+        const lsa = state.landingSiteAnalysis;
+        if (lsa && lsa.initialTargetStatus === 'UNSAFE' && lsa.selectedTarget) {
+          if (!state.trnRedirectInitiated) {
+            state.trnRedirectInitiated = true;
+            lsa.decisionLog.push('[MC] INITIAL LANDING SITE UNSAFE — AUTONOMOUS REDIRECT REQUIRED');
+            lsa.decisionLog.push(
+              `[MC] SAFE TARGET LOCKED: (${lsa.selectedTarget.x.toFixed(0)}m, ${lsa.selectedTarget.z.toFixed(0)}m) — Score: ${lsa.selectedTarget.safetyScore.toFixed(1)}`
+            );
+            lsa.decisionLog.push('[MC] AUTONOMOUS TRAJECTORY CORRECTION INITIATED');
+            state._lastDistLogTime = state.elapsed;
+          }
+          return 'AUTONOMOUS_TARGET_REALIGNMENT';
+        }
       }
 
       return 'PARACHUTE_DESCENT';
@@ -157,8 +160,14 @@ export function determinePhase(state) {
       if (state.altitude <= GROUND_ALTITUDE || state.grounded) {
         return 'LANDED';
       }
+      if (state.altitude <= BACKSHELL_SEP_ALTITUDE || state.backshellSeparated) {
+        if (!state.enginesActive && (state.phase === 'BACKSHELL_SEP' || state.altitude > 1650)) {
+          return 'BACKSHELL_SEP';
+        }
+        return 'POWERED_DESCENT';
+      }
 
-      // Periodic target distance log
+      // Periodic target distance log during continuous in-flight TRN descent
       const distATR = getTargetDistance(state);
       if (
         isFinite(distATR) &&
@@ -171,18 +180,27 @@ export function determinePhase(state) {
         );
       }
 
-      // Capture check
-      if (isFinite(distATR) && distATR <= TARGET_CAPTURE_RADIUS) {
-        if (state.landingSiteAnalysis) {
-          state.landingSiteAnalysis.decisionLog.push(
-            `[MC] TARGET CAPTURED (${distATR.toFixed(1)} m from safe target)`
-          );
-          state.landingSiteAnalysis.decisionLog.push('[MC] FINAL APPROACH — VELOCITY DAMPING ACTIVE');
-        }
+      return 'AUTONOMOUS_TARGET_REALIGNMENT';
+    }
+
+    case 'BACKSHELL_SEP': {
+      if (state.altitude <= GROUND_ALTITUDE || state.grounded) {
+        return 'LANDED';
+      }
+      if (state.enginesActive || state.altitude <= 1650) {
+        return 'POWERED_DESCENT';
+      }
+      return 'BACKSHELL_SEP';
+    }
+
+    case 'POWERED_DESCENT': {
+      if (state.altitude <= GROUND_ALTITUDE || state.grounded) {
+        return 'LANDED';
+      }
+      if (state.altitude <= TERMINAL_POWERED_ALTITUDE || state.skyCraneActive) {
         return 'SAFE_APPROACH';
       }
-
-      return 'AUTONOMOUS_TARGET_REALIGNMENT';
+      return 'POWERED_DESCENT';
     }
 
     case 'SAFE_APPROACH': {
@@ -193,9 +211,11 @@ export function determinePhase(state) {
     }
 
     default:
-      if (state.altitude > ENTRY_INTERFACE_ALTITUDE) {
-        return 'MARS_ORBIT';
-      }
+      if (state.altitude > ENTRY_INTERFACE_ALTITUDE) return 'MARS_ORBIT';
+      if (state.altitude <= GROUND_ALTITUDE) return 'LANDED';
+      if (state.altitude <= TERMINAL_POWERED_ALTITUDE) return 'SAFE_APPROACH';
+      if (state.altitude <= BACKSHELL_SEP_ALTITUDE) return 'POWERED_DESCENT';
+      if (state.altitude <= PARACHUTE_DEPLOY_ALTITUDE) return 'PARACHUTE_DESCENT';
       return 'ATMOSPHERIC_ENTRY';
   }
 }
@@ -304,8 +324,8 @@ export function createInitialState(options = {}) {
     // These define the "local terrain origin" in global space so that
     // selectedTarget.x/z offsets map correctly to global targets.
     // ------------------------------------------------------------------
-    guidanceRefX: undefined,
-    guidanceRefZ: undefined,
+    guidanceRefX: JEZERO_TARGET_X,
+    guidanceRefZ: JEZERO_TARGET_Z,
     landingError: null,          // m — distance from selected target at touchdown
     _lastDistLogTime: null,      // internal: throttles periodic distance log entries
 
@@ -320,8 +340,22 @@ export function createInitialState(options = {}) {
     elapsed: 0,
     running: false,
     noiseEnabled: true,
+    timeScale: 1.0,
+    heatShieldSeparated: false,
+    heatShieldPos: null,
+    radarLocked: false,
+    trnActive: false,
+    backshellSeparated: false,
+    backshellPos: null,
+    skyCraneActive: false,
+    cruiseStageSeparated: false,
+    cruiseStagePos: null,
+    skyCraneLoweringProgress: 0.0,
+    descentStageFlyaway: false,
+    descentStagePos: null,
+    cablesReleased: false,
+    mode: 'DEMO',
   };
-
 
   initialTrueState.sensors = computeMeasuredState(initialTrueState, 0, true);
 
@@ -341,24 +375,45 @@ export function createInitialState(options = {}) {
  * @param {object} accumRef     Reference holding accumulated time.
  */
 export function tickSimulation(state, wallDelta, accumRef) {
-  if (!state.running || state.grounded) return;
+  if (!state.running || state.grounded) {
+    state.substepsLastFrame = 0;
+    state.physicsMsLastFrame = 0;
+    return;
+  }
 
-  // Clamp wallDelta to prevent spiral of death on tab unfocus
-  const clampedDelta = Math.min(wallDelta, 0.1);
+  const t0 = performance.now();
+  // Bound wallDelta to prevent spiral of death on tab blur / hitch
+  const clampedDelta = Math.min(wallDelta, 0.05);
 
   // Time-scale acceleration
-  accumRef.current += clampedDelta * TIME_SCALE;
+  const effectiveTimeScale = state.timeScale !== undefined ? state.timeScale : TIME_SCALE;
+  accumRef.current += clampedDelta * effectiveTimeScale;
+
+  // Prevent excessive time accumulation
+  const maxAllowedAccum = effectiveTimeScale > 10 ? 1.0 : 0.4;
+  if (accumRef.current > maxAllowedAccum) {
+    accumRef.current = maxAllowedAccum;
+  }
+
+  // Determine adaptive sub-step timestep to bound substeps to <= 5 per render frame
+  let dt = PHYSICS_DT;
+  let maxSteps = 4;
+  if (effectiveTimeScale > 2) {
+    maxSteps = 5;
+    // Calculate adaptive dt so that accumRef is consumed in ~4 steps, bounded between PHYSICS_DT and 0.20s
+    dt = Math.min(0.20, Math.max(PHYSICS_DT, accumRef.current / 4.0));
+  }
 
   let safetyCounter = 0;
-  while (accumRef.current >= PHYSICS_DT && safetyCounter < 50) {
+  while (accumRef.current >= dt && safetyCounter < maxSteps) {
     // If in orbit, increment orbital time counter
     if (state.phase === 'MARS_ORBIT') {
-      state.orbitTime = (state.orbitTime || 0) + PHYSICS_DT;
+      state.orbitTime = (state.orbitTime || 0) + dt;
     }
 
     // Advance 3-DoF dynamics
-    stepSimulation(state, PHYSICS_DT);
-    accumRef.current -= PHYSICS_DT;
+    stepSimulation(state, dt);
+    accumRef.current -= dt;
     safetyCounter++;
 
     // Evaluate autonomous mission state transitions
@@ -366,4 +421,13 @@ export function tickSimulation(state, wallDelta, accumRef) {
       state.phase = determinePhase(state);
     }
   }
+
+  // Clear lingering fractional debt when hitting step ceiling
+  if (accumRef.current > dt * 1.5) {
+    accumRef.current = dt * 0.5;
+  }
+
+  state.substepsLastFrame = safetyCounter;
+  state.physicsMsLastFrame = performance.now() - t0;
 }
+

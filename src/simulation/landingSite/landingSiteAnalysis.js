@@ -158,6 +158,15 @@ export function generateSafetyGrid(centerTarget = INITIAL_PLANNED_TARGET, dimens
   };
 }
 
+// Analysis cache for instantaneous retrieval without 250ms procedural terrain lag
+const _analysisCache = new Map();
+
+function getAnalysisCacheKey(plannedTarget) {
+  const x = Math.round((plannedTarget?.x || 0) * 10) / 10;
+  const z = Math.round((plannedTarget?.z || 0) * 10) / 10;
+  return `${x},${z}`;
+}
+
 /**
  * Perform autonomous landing-site evaluation, hazard identification, and safe target selection.
  *
@@ -165,6 +174,15 @@ export function generateSafetyGrid(centerTarget = INITIAL_PLANNED_TARGET, dimens
  * @returns {object} Comprehensive landing site analysis state.
  */
 export function performLandingSiteAnalysis(plannedTarget = INITIAL_PLANNED_TARGET) {
+  const key = getAnalysisCacheKey(plannedTarget);
+  const cached = _analysisCache.get(key);
+  if (cached) {
+    return {
+      ...cached,
+      decisionLog: [...cached.decisionLog],
+    };
+  }
+
   // 1. Analyze initial planned target
   const initialAnalysis = analyzeCandidate(plannedTarget.x, plannedTarget.z, plannedTarget);
 
@@ -257,4 +275,17 @@ export function performLandingSiteAnalysis(plannedTarget = INITIAL_PLANNED_TARGE
     grid,
     decisionLog,
   };
+
+  _analysisCache.set(key, result);
+  return {
+    ...result,
+    decisionLog: [...decisionLog],
+  };
+}
+
+// Pre-warm analysis for initial planned target on module load so mid-flight execution is 0ms
+try {
+  performLandingSiteAnalysis(INITIAL_PLANNED_TARGET);
+} catch (e) {
+  // Graceful fallback if environment is uninitialized
 }

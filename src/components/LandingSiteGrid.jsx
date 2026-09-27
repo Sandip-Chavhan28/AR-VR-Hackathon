@@ -6,25 +6,23 @@
  *   - Proportional target markers (matching landing clearance footprint, not kilometers wide)
  *   - UNSAFE TARGET: crisp technical red marker on terrain with beacon
  *   - SAFE TARGET: clean green/cyan target ring + highlighted circular landing zone
- *   - Cells follow terrain elevation: getTerrainHeight(x, z) * RENDER_SCALE * ELEV_EXAGGERATION
+ *   - Cells follow the shared MOLA/procedural render-height sampler
  *   - Technical, semi-transparent aesthetic (not overwhelming the Martian terrain)
  */
 
 import React, { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
-import { RENDER_SCALE } from '../simulation/physics/constants.js';
-import { getTerrainHeight } from '../simulation/landingSite/terrain.js';
-import { ELEV_EXAGGERATION } from './MarsSurface.jsx';
+import { RENDER_SCALE, JEZERO_TARGET_X, JEZERO_TARGET_Z } from '../simulation/physics/constants.js';
+import { getLandingSurfaceRenderHeight, MARS_SURFACE_FRAME } from './marsSurfaceFrame.js';
 
 const CELL_GAP          = 0.88;
-const GRID_VISUAL_LIFT  = 0.003; // Lift slightly above terrain to prevent z-fighting
+const GRID_VISUAL_LIFT  = 0.000003; // 3 mm lift above terrain
 
 function terrainRenderPos(physX, physZ) {
-  const elevM = getTerrainHeight(physX, physZ);
   const rx = physX * RENDER_SCALE;
   const rz = physZ * RENDER_SCALE;
-  const ry = elevM * RENDER_SCALE * ELEV_EXAGGERATION + GRID_VISUAL_LIFT;
+  const ry = getLandingSurfaceRenderHeight(physX, physZ) + GRID_VISUAL_LIFT;
   return [rx, ry, rz];
 }
 
@@ -38,11 +36,29 @@ export default function LandingSiteGrid({ simStateRef }) {
   useFrame(() => {
     if (!groupRef.current) return;
     const s = simStateRef?.current;
-    if (!s?.landingSiteAnalysis) {
+    const alt = s?.altitude ?? 0;
+    const isTerminalOrLanded =
+      s?.phase === 'LANDED' ||
+      s?.phase === 'TOUCHDOWN' ||
+      s?.phase === 'SKY_CRANE' ||
+      s?.phase === 'FLYAWAY' ||
+      s?.phase === 'SURFACE_OPS' ||
+      s?.grounded;
+
+    if (!s?.landingSiteAnalysis || isTerminalOrLanded || alt < 350 || alt > 7000) {
       groupRef.current.visible = false;
       return;
     }
     groupRef.current.visible = true;
+
+    // Smooth fade between 1200m and 350m so grid seamlessly disappears before touchdown
+    const fade = Math.min(1.0, Math.max(0.0, (alt - 350) / 850));
+
+    // Anchor group to fixed Jezero landing site datum
+    const refX = (s?.guidanceRefX !== undefined ? s.guidanceRefX : JEZERO_TARGET_X) * RENDER_SCALE;
+    const refZ = (s?.guidanceRefZ !== undefined ? s.guidanceRefZ : JEZERO_TARGET_Z) * RENDER_SCALE;
+    groupRef.current.position.copy(MARS_SURFACE_FRAME.origin);
+    groupRef.current.quaternion.copy(MARS_SURFACE_FRAME.rotation);
 
     const t = performance.now() * 0.001;
 
@@ -52,9 +68,13 @@ export default function LandingSiteGrid({ simStateRef }) {
       const scanRadius = scanPhase * 0.12; // up to 120m in render units
       scanRingRef.current.scale.set(scanRadius, scanRadius, 1);
       if (scanRingRef.current.material) {
-        scanRingRef.current.material.opacity = (1.0 - scanPhase) * 0.45;
+        scanRingRef.current.material.opacity = (1.0 - scanPhase) * 0.45 * fade;
       }
     }
+
+    if (safeMat) safeMat.opacity = 0.32 * fade;
+    if (cautionMat) cautionMat.opacity = 0.28 * fade;
+    if (unsafeMat) unsafeMat.opacity = 0.35 * fade;
 
     // Pulse markers subtly
     if (initBeaconRef.current) {
@@ -179,7 +199,6 @@ export default function LandingSiteGrid({ simStateRef }) {
             <cylinderGeometry args={[0.001, 0.001, 0.30, 8]} />
             <meshBasicMaterial color="#ff3344" transparent opacity={0.75} />
           </mesh>
-          <pointLight color="#ff1744" intensity={0.8} distance={0.8} position={[0, 0.1, 0]} />
         </group>
       )}
 
@@ -216,7 +235,6 @@ export default function LandingSiteGrid({ simStateRef }) {
             <cylinderGeometry args={[0.0012, 0.0012, 0.40, 8]} />
             <meshBasicMaterial color="#00ff88" transparent opacity={0.85} />
           </mesh>
-          <pointLight color="#00e676" intensity={1.0} distance={1.0} position={[0, 0.1, 0]} />
         </group>
       )}
     </group>

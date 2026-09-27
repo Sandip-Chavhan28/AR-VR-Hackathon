@@ -233,7 +233,7 @@ export const PARACHUTE_AREA = 220.0; // m²
  * Simulated canopy inflation / deployment duration (seconds).
  * The effective area ramps smoothly from 0 to 1 over this period to prevent numerical shock.
  */
-export const PARACHUTE_DEPLOY_DURATION = 2.0; // seconds
+export const PARACHUTE_DEPLOY_DURATION = 4.8; // seconds
 
 // ---------------------------------------------------------------------------
 // Environmental Wind Parameters (Phase 3A)
@@ -254,3 +254,85 @@ export const WIND_PEAK_SPEED_Z = 14.0; // m/s
  * Mars radius = 3,389.5 Three.js units.
  */
 export const RENDER_SCALE = 1 / 1000;
+
+// ---------------------------------------------------------------------------
+// Mars 2020 Jezero Crater Landing Site Datum
+// ---------------------------------------------------------------------------
+/**
+ * Global physics coordinates of the Jezero Crater landing target datum (meters).
+ * 1 Three.js render unit = 1,000 m → 3324.010 Three.js units.
+ * This coordinate is permanently fixed on Mars — terrain does NOT move.
+ */
+export const JEZERO_TARGET_X = 3324010.0; // m
+export const JEZERO_TARGET_Y = -2726425.5; // m (Spherical surface Y coordinate at Jezero)
+export const JEZERO_TARGET_Z = 85.0;     // m
+export const ROVER_WHEEL_CONTACT_OFFSET = 0.54; // m (Rover origin to wheel bottom contact plane)
+export const ROVER_WHEEL_CONTACT_Y = -0.54; // Wheel bottom contact plane relative to rover origin
+export const ROVER_WHEEL_RADIUS = 0.2625; // m (52.5 cm diameter / 2)
+export const ROVER_WHEEL_DIAMETER = 0.525;
+export const ROVER_WHEEL_WIDTH = 0.25;
+
+// 6 Wheel Centers in local Rover coordinates (matches 2.7m track width & 2.1m wheelbase)
+export const ROVER_WHEEL_COORDS = [
+  { id: 'FL', name: 'Front-Left Wheel',   x: -1.15, z:  1.05, steerable: true  },
+  { id: 'FR', name: 'Front-Right Wheel',  x:  1.15, z:  1.05, steerable: true  },
+  { id: 'ML', name: 'Middle-Left Wheel',  x: -1.20, z:  0.00, steerable: false },
+  { id: 'MR', name: 'Middle-Right Wheel', x:  1.20, z:  0.00, steerable: false },
+  { id: 'RL', name: 'Rear-Left Wheel',    x: -1.15, z: -1.05, steerable: true  },
+  { id: 'RR', name: 'Rear-Right Wheel',   x:  1.15, z: -1.05, steerable: true  },
+];
+
+// ---------------------------------------------------------------------------
+// Mars 2020 EDL Staging Milestones & Staging Thresholds
+// ---------------------------------------------------------------------------
+/**
+ * Heat shield jettison altitude (meters).
+ * Exposes the terminal descent radar and Lander Vision System (LVS) camera.
+ */
+export const HEAT_SHIELD_SEP_ALTITUDE = 8000.0; // m (8 km)
+
+/**
+ * Terminal descent radar altimeter ground lock acquisition threshold (meters).
+ */
+export const RADAR_LOCK_ALTITUDE = 4000.0; // m (4 km)
+
+/**
+ * Backshell and supersonic parachute separation altitude (meters).
+ * Vehicle transitions to powered retro-propulsion descent.
+ */
+export const BACKSHELL_SEP_ALTITUDE = 1800.0; // m (1.8 km)
+
+/**
+ * Terminal powered descent / Sky Crane activation altitude (meters).
+ */
+export const TERMINAL_POWERED_ALTITUDE = 30.0; // m
+
+/**
+ * Descent stage total throttleable thrust (Newtons).
+ * Mars 2020 Sky Crane descent stage: 8 × 4,000 N Mars Lander Engines (MLEs).
+ */
+export const DESCENT_STAGE_THRUST = 32000.0; // N
+
+/**
+ * Mean speed of sound in Martian cold CO2 atmosphere (~210 K).
+ */
+export const MARS_SPEED_OF_SOUND = 225.0; // m/s
+
+/**
+ * Maximum safe touchdown vertical velocity threshold (< 2.5 m/s).
+ */
+export const TOUCHDOWN_MAX_SAFE_SPEED = 2.5; // m/s
+export const TOUCHDOWN_NOMINAL_SPEED = 0.75; // m/s
+
+/**
+ * Free-fall duration after backshell separation before 8 MLE rocket ignition (seconds).
+ * Allows descent stage to clear the jettisoned parachute and backshell.
+ */
+export const BACKSHELL_FREEFALL_DURATION = 1.2; // s
+
+/**
+ * Sky Crane hover altitude and bridle cable extension length (meters).
+ */
+export const SKY_CRANE_HOVER_ALTITUDE = 21.0; // m
+export const SKY_CRANE_CABLE_LENGTH = 7.5; // m
+

@@ -4,19 +4,22 @@
   "private": true,
   "type": "module",
   "dependencies": {
+    "@react-three/fiber": "^8.15.12",
+    "axios": "^1.6.5",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "axios": "^1.6.5",
-    "three": "^0.160.0",
-    "@react-three/fiber": "^8.15.12"
+    "three": "^0.160.0"
   },
   "devDependencies": {
-    "vite": "^5.0.0",
-    "@vitejs/plugin-react": "^4.2.0"
+    "@vitejs/plugin-react": "^4.2.0",
+    "playwright": "^1.63.0",
+    "vite": "^5.0.0"
   },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "terrain:mola": "node scripts/preprocess-mola.mjs",
+    "test": "node tests/physics.test.js && node tests/orbit.test.js && node tests/parachute.test.js && node tests/landingSite.test.js && node tests/edlExperience.test.js && node tests/soundEffects.test.js"
   }
 }

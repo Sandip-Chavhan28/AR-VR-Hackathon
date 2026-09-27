@@ -25,6 +25,7 @@ export default function OrbitalTrajectory({ simStateRef }) {
   const trailPositions = useRef(new Float32Array(MAX_TRAIL_POINTS * 3));
   const trailCount = useRef(0);
   const lastAddPos = useRef(new THREE.Vector3());
+  const currentPos = useRef(new THREE.Vector3());
 
   // 1. Static Circular Parking Orbit Ring (250 km)
   const parkingOrbitGeometry = useMemo(() => {
@@ -55,23 +56,23 @@ export default function OrbitalTrajectory({ simStateRef }) {
     const s = simStateRef?.current;
     if (!s || !trailLineRef.current) return;
 
-    const currentPos = new THREE.Vector3(
+    currentPos.current.set(
       s.x * RENDER_SCALE,
-      s.y * RENDER_SCALE,
+      (Number.isFinite(s.altitude) ? s.altitude : s.y) * RENDER_SCALE,
       s.z * RENDER_SCALE
     );
 
     // Only append point if moved noticeably (> 0.3 units)
-    if (currentPos.distanceTo(lastAddPos.current) > 0.3) {
-      lastAddPos.current.copy(currentPos);
+    if (currentPos.current.distanceTo(lastAddPos.current) > 0.3) {
+      lastAddPos.current.copy(currentPos.current);
 
       const array = trailPositions.current;
       const count = trailCount.current;
 
       if (count < MAX_TRAIL_POINTS) {
-        array[count * 3 + 0] = currentPos.x;
-        array[count * 3 + 1] = currentPos.y;
-        array[count * 3 + 2] = currentPos.z;
+        array[count * 3 + 0] = currentPos.current.x;
+        array[count * 3 + 1] = currentPos.current.y;
+        array[count * 3 + 2] = currentPos.current.z;
         trailCount.current += 1;
       } else {
         // Shift points left to make room
@@ -79,9 +80,9 @@ export default function OrbitalTrajectory({ simStateRef }) {
           array[i] = array[i + 3];
         }
         const lastIdx = (MAX_TRAIL_POINTS - 1) * 3;
-        array[lastIdx + 0] = currentPos.x;
-        array[lastIdx + 1] = currentPos.y;
-        array[lastIdx + 2] = currentPos.z;
+        array[lastIdx + 0] = currentPos.current.x;
+        array[lastIdx + 1] = currentPos.current.y;
+        array[lastIdx + 2] = currentPos.current.z;
       }
 
       trailGeometry.attributes.position.needsUpdate = true;

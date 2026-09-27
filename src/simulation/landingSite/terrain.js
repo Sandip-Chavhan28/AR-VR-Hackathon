@@ -1,15 +1,77 @@
 /**
- * terrain.js – Deterministic mathematical procedural Mars terrain model.
+ * terrain.js – Shared MOLA-backed Mars terrain sampler with deterministic fallback.
  *
  * Requirements:
  *   - Completely deterministic and reproducible across runs (zero Math.random()).
  *   - Continuous and smooth enough for numerical gradient slope calculation.
  *   - Computationally lightweight and independent of React.
  *   - Combines:
- *       1. Base rolling terrain (multi-harmonic regional topography)
- *       2. Deterministic crater depressions with raised rims and ejecta blankets
- *       3. Deterministic obstacle clusters (rocky ridges and boulder fields)
+ *       1. NASA MOLA MEGDR regional elevation (when the local tile is bundled)
+ *       2. Deterministic local crater depressions and obstacle detail
+ *       3. Deterministic procedural regional fallback when outside/missing MOLA
  */
+
+import molaTile from '../../data/mola-regional.json' with { type: 'json' };
+import { MARS_RADIUS, RENDER_SCALE } from '../physics/constants.js';
+
+export const MOLA_TILE = molaTile;
+export const TERRAIN_SOURCE = molaTile?.source?.includes('NASA Mars Global Surveyor MOLA') ? 'NASA MOLA' : 'Procedural Fallback';
+
+const DEG_TO_RAD = Math.PI / 180;
+const MOLA_BOUNDS = molaTile?.bounds;
+const MOLA_ANCHOR = molaTile?.anchor;
+const MOLA_VALUES = molaTile?.elevationsMeters;
+const MOLA_COLS = molaTile?.ncols || 0;
+const MOLA_ROWS = molaTile?.nrows || 0;
+const MOLA_PPD = molaTile?.pixelsPerDegree || 0;
+const MOLA_ANCHOR_HEIGHT = MOLA_BOUNDS && MOLA_ANCHOR && MOLA_VALUES
+  ? sampleMolaAbsolute(MOLA_ANCHOR.latitude, MOLA_ANCHOR.longitude)
+  : null;
+
+function sampleMolaAbsolute(latitude, longitude) {
+  if (!MOLA_BOUNDS || !MOLA_VALUES || !MOLA_PPD) return null;
+  if (latitude < MOLA_BOUNDS.south || latitude > MOLA_BOUNDS.north || longitude < MOLA_BOUNDS.west || longitude > MOLA_BOUNDS.east) return null;
+
+  const column = (longitude - MOLA_BOUNDS.west) * MOLA_PPD;
+  const row = (MOLA_BOUNDS.north - latitude) * MOLA_PPD;
+  const x0 = Math.min(MOLA_COLS - 1, Math.max(0, Math.floor(column)));
+  const z0 = Math.min(MOLA_ROWS - 1, Math.max(0, Math.floor(row)));
+  const x1 = Math.min(MOLA_COLS - 1, x0 + 1);
+  const z1 = Math.min(MOLA_ROWS - 1, z0 + 1);
+  const tx = column - x0;
+  const tz = row - z0;
+  const h00 = MOLA_VALUES[z0 * MOLA_COLS + x0];
+  const h10 = MOLA_VALUES[z0 * MOLA_COLS + x1];
+  const h01 = MOLA_VALUES[z1 * MOLA_COLS + x0];
+  const h11 = MOLA_VALUES[z1 * MOLA_COLS + x1];
+  const north = h00 + (h10 - h00) * tx;
+  const south = h01 + (h11 - h01) * tx;
+  return north + (south - north) * tz;
+}
+
+export function getMolaTerrainHeight(x, z) {
+  if (MOLA_ANCHOR_HEIGHT === null) return null;
+  const latitude = MOLA_ANCHOR.latitude + (z / MARS_RADIUS) / DEG_TO_RAD;
+  const longitude = MOLA_ANCHOR.longitude + (x / (MARS_RADIUS * Math.cos(MOLA_ANCHOR.latitude * DEG_TO_RAD))) / DEG_TO_RAD;
+  const absoluteHeight = sampleMolaAbsolute(latitude, longitude);
+  return absoluteHeight === null ? null : absoluteHeight - MOLA_ANCHOR_HEIGHT;
+}
+
+export function getTerrainSourceInfo() {
+  return {
+    source: MOLA_ANCHOR_HEIGHT === null ? 'Procedural Fallback' : 'NASA MOLA',
+    loaded: MOLA_ANCHOR_HEIGHT !== null,
+    product: molaTile?.product || null,
+    samples: MOLA_VALUES?.length || 0,
+    columns: MOLA_COLS,
+    rows: MOLA_ROWS,
+    minimumMeters: molaTile?.minElevationMeters ?? null,
+    maximumMeters: molaTile?.maxElevationMeters ?? null,
+    anchorMeters: MOLA_ANCHOR_HEIGHT,
+    bounds: MOLA_BOUNDS || null,
+    anchor: MOLA_ANCHOR || null,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Deterministic Catalog of Landing Zone Topographic Features
@@ -80,10 +142,12 @@ export const OBSTACLES = [
  * @returns {number} Terrain surface elevation above reference datum in meters.
  */
 export function getTerrainHeight(x, z) {
-  // 1. Regional gentle undulating topography (low-frequency continuous harmonics)
-  let elevation =
+  // The MOLA tile supplies regional topography; these harmonics remain the deterministic fallback.
+  const molaHeight = getMolaTerrainHeight(x, z);
+  let elevation = molaHeight ?? (
     3.2 * Math.sin(0.016 * x + 0.3) * Math.cos(0.014 * z + 0.5) +
-    1.6 * Math.sin(0.038 * x + 1.2) * Math.sin(0.032 * z + 0.8);
+    1.6 * Math.sin(0.038 * x + 1.2) * Math.sin(0.032 * z + 0.8)
+  );
 
   // 2. Craters contribution (parabolic bowl depressions + raised elevated rims)
   for (let i = 0; i < CRATERS.length; i++) {
@@ -124,6 +188,14 @@ export function getTerrainHeight(x, z) {
   return elevation;
 }
 
+export function getTerrainRenderHeight(x, z, detailExaggeration = 38) {
+  const terrainHeight = getTerrainHeight(x, z);
+  const molaHeight = getMolaTerrainHeight(x, z);
+  if (molaHeight === null) return terrainHeight * RENDER_SCALE * detailExaggeration;
+  const localDetail = terrainHeight - molaHeight;
+  return (molaHeight + localDetail * detailExaggeration) * RENDER_SCALE;
+}
+
 // ---------------------------------------------------------------------------
 // Slope Calculation (Numerical Gradient)
 // ---------------------------------------------------------------------------
@@ -138,13 +210,28 @@ export function getTerrainHeight(x, z) {
  * @returns {number} Terrain slope in degrees (0° = perfectly flat horizontal surface).
  */
 export function getTerrainSlope(x, z, sampleDist = 1.0) {
-  const hRight = getTerrainHeight(x + sampleDist, z);
-  const hLeft = getTerrainHeight(x - sampleDist, z);
-  const hForward = getTerrainHeight(x, z + sampleDist);
-  const hBackward = getTerrainHeight(x, z - sampleDist);
-
-  const dx = (hRight - hLeft) / (2.0 * sampleDist);
-  const dz = (hForward - hBackward) / (2.0 * sampleDist);
+  let dx;
+  let dz;
+  if (MOLA_ANCHOR_HEIGHT !== null && getMolaTerrainHeight(x, z) !== null) {
+    // The global MEGDR is 463 m/sample; estimate regional grade over ~16 km,
+    // then add meter-scale procedural crater/obstacle grade at the requested baseline.
+    const regionalBaseline = 16000;
+    const halfRegional = regionalBaseline * 0.5;
+    const molaEast = (getMolaTerrainHeight(x + halfRegional, z) - getMolaTerrainHeight(x - halfRegional, z)) / regionalBaseline;
+    const molaNorth = (getMolaTerrainHeight(x, z + halfRegional) - getMolaTerrainHeight(x, z - halfRegional)) / regionalBaseline;
+    const detailHeight = (sampleX, sampleZ) => getTerrainHeight(sampleX, sampleZ) - getMolaTerrainHeight(sampleX, sampleZ);
+    const detailDx = (detailHeight(x + sampleDist, z) - detailHeight(x - sampleDist, z)) / (2.0 * sampleDist);
+    const detailDz = (detailHeight(x, z + sampleDist) - detailHeight(x, z - sampleDist)) / (2.0 * sampleDist);
+    dx = molaEast + detailDx;
+    dz = molaNorth + detailDz;
+  } else {
+    const hRight = getTerrainHeight(x + sampleDist, z);
+    const hLeft = getTerrainHeight(x - sampleDist, z);
+    const hForward = getTerrainHeight(x, z + sampleDist);
+    const hBackward = getTerrainHeight(x, z - sampleDist);
+    dx = (hRight - hLeft) / (2.0 * sampleDist);
+    dz = (hForward - hBackward) / (2.0 * sampleDist);
+  }
 
   const slopeMagnitude = Math.sqrt(dx * dx + dz * dz);
   const slopeAngleRad = Math.atan(slopeMagnitude);

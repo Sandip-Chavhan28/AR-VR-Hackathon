@@ -14,23 +14,31 @@ import React, { useRef, useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 
-const NUM_LINES        = 8;
-const CANOPY_RADIUS    = 2.4;
-const SUSPENSION_HEIGHT= 4.2;
+const NUM_LINES         = 16;
+const CANOPY_RADIUS     = 3.2;
+const SUSPENSION_HEIGHT = 7.0;
 
 // Visual deflation time constant (seconds from LANDED moment to fully collapsed)
 const DEFLATION_DURATION = 10.0;
 
-export default function Parachute({ simStateRef }) {
+export default function Parachute({ simStateRef, isJettisoned = false }) {
   const parachuteGroupRef    = useRef();
   const canopyMeshRef        = useRef();
-  const innerCanopyMeshRef   = useRef();
   const linesMeshRef         = useRef();
 
   // Track when LANDED phase first detected (for deflation timer)
   const landedSince = useRef(null);
 
-  // Procedural suspension lines (apex → canopy rim)
+  // A shallow lathed gore gives the DGB canopy a real bowl profile instead of a sphere cap.
+  const canopyProfile = useMemo(() => [
+    new THREE.Vector2(0.06, 0.78),
+    new THREE.Vector2(0.72, 0.72),
+    new THREE.Vector2(1.55, 0.52),
+    new THREE.Vector2(2.35, 0.22),
+    new THREE.Vector2(CANOPY_RADIUS, 0),
+  ], []);
+
+  // Procedural suspension lines (apex -> canopy rim)
   const linesGeometry = useMemo(() => {
     const positions = [];
     const apex = new THREE.Vector3(0, 0.4, 0);
@@ -49,12 +57,10 @@ export default function Parachute({ simStateRef }) {
   }, []);
 
   // Materials
-  const canopyMaterial = useMemo(() => new THREE.MeshStandardMaterial({
-    color: '#ff5511', roughness: 0.7, metalness: 0.1, side: THREE.DoubleSide,
-  }), []);
-  const innerCanopyMaterial = useMemo(() => new THREE.MeshStandardMaterial({
-    color: '#ffffff', roughness: 0.8, metalness: 0.05, side: THREE.DoubleSide,
-  }), []);
+  const canopyMaterials = useMemo(() => [
+    new THREE.MeshStandardMaterial({ color: '#e64b1a', roughness: 0.78, metalness: 0.05, side: THREE.DoubleSide }),
+    new THREE.MeshStandardMaterial({ color: '#f2eee4', roughness: 0.86, metalness: 0.02, side: THREE.DoubleSide }),
+  ], []);
   const linesMaterial = useMemo(() => new THREE.LineBasicMaterial({
     color: '#f0f4f8', transparent: true, opacity: 0.85, linewidth: 1,
   }), []);
@@ -68,9 +74,20 @@ export default function Parachute({ simStateRef }) {
     const pState   = s.parachuteState || 'PACKED';
     const phase    = s.phase || '';
     const isLanded = phase === 'LANDED' || s.grounded;
+    const isSep    = !!s.backshellSeparated;
+
+    // Visibility rules based on staging
+    if (!isJettisoned && isSep) {
+      parachuteGroupRef.current.visible = false;
+      return;
+    }
+    if (isJettisoned && !isSep) {
+      parachuteGroupRef.current.visible = false;
+      return;
+    }
 
     // ── PACKED or not yet deploying ──────────────────────────────────────
-    if (pState === 'PACKED' || progress <= 0.001) {
+    if (pState === 'PACKED') {
       parachuteGroupRef.current.visible = false;
       landedSince.current = null;
       return;
@@ -82,6 +99,7 @@ export default function Parachute({ simStateRef }) {
       // Reset deflation timer whenever we're not landed
       landedSince.current = null;
     }
+
 
     // ── LANDED: visual deflation ─────────────────────────────────────────
     if (isLanded) {
@@ -97,9 +115,6 @@ export default function Parachute({ simStateRef }) {
       const scaleZ  = scaleX;
 
       canopyMeshRef.current?.scale.set(scaleX, scaleY, scaleZ);
-      if (innerCanopyMeshRef.current) {
-        innerCanopyMeshRef.current.scale.set(scaleX * 0.98, scaleY * 0.98, scaleZ * 0.98);
-      }
       if (linesMeshRef.current) {
         linesMeshRef.current.scale.set(scaleX, scaleY, scaleZ);
         // Tip lines sideways as canopy falls
@@ -107,59 +122,75 @@ export default function Parachute({ simStateRef }) {
         linesMeshRef.current.rotation.x = deflation * 0.3;
       }
       // Fade canopy opacity as it deflates
-      if (canopyMaterial.transparent !== true) canopyMaterial.transparent = true;
-      canopyMaterial.opacity      = Math.max(0.1, 1.0 - deflation * 0.75);
-      innerCanopyMaterial.opacity = Math.max(0.05, 1.0 - deflation * 0.85);
+      canopyMaterials.forEach((material) => {
+        material.transparent = true;
+        material.opacity = Math.max(0.1, 1.0 - deflation * 0.75);
+      });
       return;
     }
 
-    // ── DEPLOYING / DEPLOYED: normal inflation ───────────────────────────
-    // Restore opacity in case we re-run (shouldn't happen but be safe)
-    canopyMaterial.opacity      = 1.0;
-    innerCanopyMaterial.opacity = 1.0;
+    // ── DEPLOYING / DEPLOYED: progressive extraction & inflation ─────────────
+    canopyMaterials.forEach((material) => {
+      material.transparent = false;
+      material.opacity = 1.0;
+    });
     if (linesMeshRef.current) {
       linesMeshRef.current.rotation.set(0, 0, 0);
     }
 
-    const scaleX = Math.max(0.05, progress);
-    const scaleY = Math.max(0.10, Math.sin(progress * Math.PI * 0.5));
+    // Stage 1: Line unspooling (progress 0.0 -> 0.35)
+    // Stage 2: Canopy radial billowing & full inflation (progress 0.35 -> 1.0)
+    const lineExtension = Math.min(1.0, Math.max(0.08, progress * 2.8));
+    const canopyRadial = progress < 0.25
+      ? 0.08 + progress * 0.3
+      : Math.pow(progress, 1.35);
+    const canopySquash = Math.max(0.12, Math.sin(progress * Math.PI * 0.5));
+
+    const scaleX = Math.max(0.05, canopyRadial);
+    const scaleY = canopySquash;
     const scaleZ = scaleX;
 
     canopyMeshRef.current?.scale.set(scaleX, scaleY, scaleZ);
-    if (innerCanopyMeshRef.current) {
-      innerCanopyMeshRef.current.scale.set(scaleX * 0.98, scaleY * 0.98, scaleZ * 0.98);
-    }
     if (linesMeshRef.current) {
-      linesMeshRef.current.scale.set(scaleX, scaleY, scaleZ);
+      linesMeshRef.current.scale.set(scaleX, lineExtension, scaleZ);
     }
 
-    // Aerodynamic flutter once fully deployed
-    if (canopyMeshRef.current && progress > 0.3) {
+    // Aerodynamic flutter and atmospheric wind reaction
+    if (canopyMeshRef.current && progress > 0.2) {
       const t = performance.now() * 0.005;
-      canopyMeshRef.current.rotation.x = Math.sin(t * 1.8) * 0.04 * (1.1 - progress * 0.3);
-      canopyMeshRef.current.rotation.z = Math.cos(t * 2.2) * 0.04 * (1.1 - progress * 0.3);
+      const windDriftX = (s.wind?.x || 0) * 0.003;
+      const windDriftZ = (s.wind?.z || 0) * 0.003;
+      canopyMeshRef.current.rotation.x = Math.sin(t * 1.8) * 0.035 * (1.1 - progress * 0.25) + windDriftZ;
+      canopyMeshRef.current.rotation.z = Math.cos(t * 2.2) * 0.035 * (1.1 - progress * 0.25) + windDriftX;
     }
   });
 
   return (
-    <group ref={parachuteGroupRef} position={[0, 0.9, 0]} visible={false}>
+    <group ref={parachuteGroupRef} position={[0, 0.9, 0]} scale={1.25} visible={false}>
       {/* Suspension Lines */}
       <lineSegments ref={linesMeshRef} geometry={linesGeometry} material={linesMaterial} />
 
-      {/* Canopy dome */}
+      {/* Alternating DGB gore panels with a visible gap between each panel */}
       <group position={[0, SUSPENSION_HEIGHT, 0]}>
-        {/* Outer orange canopy */}
-        <mesh ref={canopyMeshRef} material={canopyMaterial} rotation={[Math.PI, 0, 0]} castShadow>
-          <sphereGeometry args={[CANOPY_RADIUS, 24, 14, 0, Math.PI * 2, 0, Math.PI * 0.48]} />
-        </mesh>
-        {/* Inner white lining */}
-        <mesh ref={innerCanopyMeshRef} material={innerCanopyMaterial} rotation={[Math.PI, 0, 0]}>
-          <sphereGeometry args={[CANOPY_RADIUS * 0.98, 24, 14, 0, Math.PI * 2, 0, Math.PI * 0.47]} />
-        </mesh>
-        {/* Vent ring apex */}
-        <mesh position={[0, CANOPY_RADIUS * 0.48, 0]}>
-          <torusGeometry args={[0.35, 0.06, 8, 16]} />
-          <meshStandardMaterial color="#ffffff" metalness={0.2} roughness={0.6} />
+        <group ref={canopyMeshRef}>
+          {Array.from({ length: NUM_LINES }, (_, index) => {
+            const panelAngle = (index / NUM_LINES) * Math.PI * 2;
+            const panelGap = 0.018;
+            const panelWidth = (Math.PI * 2 / NUM_LINES) - panelGap;
+            return (
+              <mesh
+                key={`gore-${index}`}
+                geometry={new THREE.LatheGeometry(canopyProfile, 8, panelAngle + panelGap * 0.5, panelWidth)}
+                material={canopyMaterials[index % 2]}
+                rotation={[Math.PI, 0, 0]}
+                castShadow
+              />
+            );
+          })}
+        </group>
+        <mesh position={[0, 0.78, 0]} rotation={[Math.PI / 2, 0, 0]}>
+          <torusGeometry args={[0.23, 0.055, 8, 24]} />
+          <meshStandardMaterial color="#f2eee4" metalness={0.15} roughness={0.65} />
         </mesh>
       </group>
     </group>

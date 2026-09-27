@@ -62,21 +62,22 @@ export function computeHarmonicNoise(cfg, t) {
  * @param {object} trueState True physical simulation state.
  * @param {number} [time] Simulation time to sample noise at (defaults to trueState.elapsed).
  * @param {boolean} [noiseEnabled=true] Whether sensor noise is active.
+ * @param {object} [outTarget=null] Optional reusable target object to eliminate GC heap allocation.
  * @returns {object} Measured sensor state object.
  */
-export function computeMeasuredState(trueState, time, noiseEnabled = true) {
+export function computeMeasuredState(trueState, time, noiseEnabled = true, outTarget = null) {
   const t = time !== undefined ? time : (trueState.elapsed || 0);
+  const out = outTarget || {};
 
   if (!noiseEnabled) {
-    return {
-      altitude: trueState.altitude || 0,
-      speed: trueState.speed || 0,
-      verticalVelocity: trueState.verticalVelocity || 0,
-      q: trueState.q || 0,
-      ax: trueState.ax || 0,
-      ay: trueState.ay || 0,
-      az: trueState.az || 0,
-    };
+    out.altitude = trueState.altitude || 0;
+    out.speed = trueState.speed || 0;
+    out.verticalVelocity = trueState.verticalVelocity || 0;
+    out.q = trueState.q || 0;
+    out.ax = trueState.ax || 0;
+    out.ay = trueState.ay || 0;
+    out.az = trueState.az || 0;
+    return out;
   }
 
   const altNoise = computeHarmonicNoise(SENSOR_NOISE_CONFIG.altitude, t);
@@ -85,13 +86,12 @@ export function computeMeasuredState(trueState, time, noiseEnabled = true) {
   const qNoise = computeHarmonicNoise(SENSOR_NOISE_CONFIG.dynamicPressure, t);
   const accNoise = computeHarmonicNoise(SENSOR_NOISE_CONFIG.acceleration, t);
 
-  return {
-    altitude: Math.max(0, (trueState.altitude || 0) + altNoise),
-    speed: Math.max(0, (trueState.speed || 0) + spdNoise),
-    verticalVelocity: (trueState.verticalVelocity || 0) + vvNoise,
-    q: Math.max(0, (trueState.q || 0) + qNoise),
-    ax: (trueState.ax || 0) + accNoise * 0.5,
-    ay: (trueState.ay || 0) + accNoise,
-    az: (trueState.az || 0) + accNoise * 0.3,
-  };
+  out.altitude = Math.max(0, (trueState.altitude || 0) + altNoise);
+  out.speed = Math.max(0, (trueState.speed || 0) + spdNoise);
+  out.verticalVelocity = (trueState.verticalVelocity || 0) + vvNoise;
+  out.q = Math.max(0, (trueState.q || 0) + qNoise);
+  out.ax = (trueState.ax || 0) + accNoise * 0.5;
+  out.ay = (trueState.ay || 0) + accNoise;
+  out.az = (trueState.az || 0) + accNoise * 0.3;
+  return out;
 }

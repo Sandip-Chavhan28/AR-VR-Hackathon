@@ -26,6 +26,12 @@ import {
   PARACHUTE_AREA,
   DEORBIT_THRUST,
   ENTRY_INTERFACE_ALTITUDE,
+  MARS_RADIUS,
+  TERMINAL_POWERED_ALTITUDE,
+  TOUCHDOWN_NOMINAL_SPEED,
+  DESCENT_STAGE_THRUST,
+  JEZERO_TARGET_X,
+  JEZERO_TARGET_Z,
 } from './constants.js';
 import { atmosphericDensity } from './atmosphere.js';
 import { centralGravityAcceleration, computeDeorbitThrust, computeHeatFlux } from './orbit.js';
@@ -92,12 +98,21 @@ export function dynamicPressure(rho, speed) {
  * @returns {{ fx: number, fy: number, fz: number }}
  *          Drag force vector in Newtons.
  */
-export function dragForce(rho, vx, vy, vz, Cd = CD_ENTRY, A = REFERENCE_AREA) {
+// Preallocated scratch vectors for zero heap GC churn
+const _scratchDrag = { fx: 0, fy: 0, fz: 0 };
+const _scratchGravity = { ax: 0, ay: 0, az: 0 };
+const _scratchThrust = { fx: 0, fy: 0, fz: 0 };
+
+export function dragForce(rho, vx, vy, vz, Cd = CD_ENTRY, A = REFERENCE_AREA, out = null) {
   const speed = Math.sqrt(vx * vx + vy * vy + vz * vz);
+  const target = out || { fx: 0, fy: 0, fz: 0 };
 
   // No drag when stationary
   if (speed < 1e-9) {
-    return { fx: 0, fy: 0, fz: 0 };
+    target.fx = 0;
+    target.fy = 0;
+    target.fz = 0;
+    return target;
   }
 
   // Drag magnitude:  D = 0.5 * rho * speed² * Cd * A
@@ -110,11 +125,10 @@ export function dragForce(rho, vx, vy, vz, Cd = CD_ENTRY, A = REFERENCE_AREA) {
   const vzHat = vz * invSpeed;
 
   // Force opposes relative velocity
-  return {
-    fx: -D * vxHat,
-    fy: -D * vyHat,
-    fz: -D * vzHat,
-  };
+  target.fx = -D * vxHat;
+  target.fy = -D * vyHat;
+  target.fz = -D * vzHat;
+  return target;
 }
 
 // ---------------------------------------------------------------------------
@@ -142,8 +156,22 @@ export function dragForce(rho, vx, vy, vz, Cd = CD_ENTRY, A = REFERENCE_AREA) {
  *   groundSpeed: number
  * }}
  */
-export function computeAcceleration(state) {
+export function computeAcceleration(state, out = null) {
   const { vx = 0, vy = 0, vz = 0, altitude = 0, mass = 900 } = state;
+
+  const res = out || {
+    ax: 0,
+    ay: 0,
+    az: 0,
+    rho: 0,
+    q: 0,
+    dragMagnitude: 0,
+    thrustMagnitude: 0,
+    heatFlux: 0,
+    wind: { x: 0, y: 0, z: 0 },
+    relativeSpeed: 0,
+    groundSpeed: 0,
+  };
 
   // Atmospheric density at current altitude
   const rho = atmosphericDensity(altitude);
@@ -176,68 +204,153 @@ export function computeAcceleration(state) {
   // Gravity: use central Mars gravity if x & y coordinates are present and flat mode not requested
   let grav;
   if (state.x !== undefined && state.y !== undefined && state.useFlatGravity !== true) {
-    grav = centralGravityAcceleration(state.x, state.y, state.z || 0);
+    grav = centralGravityAcceleration(state.x, state.y, state.z || 0, _scratchGravity);
   } else {
     grav = gravityAcceleration();
   }
 
   // Combined aerodynamic drag area (aeroshell + deploying parachute)
-  const aeroshellCdA = CD_ENTRY * REFERENCE_AREA;
-  const progress = Math.max(0, Math.min(1, state.parachuteDeploymentProgress || 0));
-  const parachuteCdA = PARACHUTE_CD * PARACHUTE_AREA * progress;
+  const isChuteAttached = !state.backshellSeparated && state.parachuteState !== 'RELEASED';
+  let parachuteCdA = 0;
+  if (isChuteAttached) {
+    const rawProgress = Math.max(0, Math.min(1, state.parachuteDeploymentProgress || 0));
+    // S-curve smooth inflation curve (3p^2 - 2p^3)
+    const sProgress = rawProgress * rawProgress * (3.0 - 2.0 * rawProgress);
+    parachuteCdA = PARACHUTE_CD * PARACHUTE_AREA * sProgress;
+  }
+  // When backshell separates, lander drag area is just the compact descent stage / rover
+  const aeroshellCdA = state.backshellSeparated ? (REFERENCE_AREA * 0.25) : (CD_ENTRY * REFERENCE_AREA);
   const totalCdA = aeroshellCdA + parachuteCdA;
 
   // Aerodynamic drag force opposing relative air velocity
-  const drag = dragForce(rho, vRelX, vRelY, vRelZ, 1.0, totalCdA);
+  const drag = dragForce(rho, vRelX, vRelY, vRelZ, 1.0, totalCdA, _scratchDrag);
   const dragAx = drag.fx / mass;
   const dragAy = drag.fy / mass;
   const dragAz = drag.fz / mass;
   const dragMagnitude = Math.sqrt(drag.fx ** 2 + drag.fy ** 2 + drag.fz ** 2);
 
-  // Deorbit thrust (Newtons)
+  // Engine Thrust
   let thrustAx = 0;
   let thrustAy = 0;
   let thrustAz = 0;
   let thrustMagnitude = 0;
 
-  if (state.enginesActive && (state.fuel === undefined || state.fuel > 0)) {
+  if (
+    (state.phase === 'DEORBIT_BURN' || state.phase === 'MARS_ORBIT' || !state.phase) &&
+    state.enginesActive &&
+    (state.fuel === undefined || state.fuel > 0) &&
+    !state.grounded
+  ) {
     const thrustLevel = state.thrust !== undefined ? state.thrust : DEORBIT_THRUST;
-    const thrust = computeDeorbitThrust(vx, vy, vz, thrustLevel);
+    const thrust = computeDeorbitThrust(vx, vy, vz, thrustLevel, _scratchThrust);
     thrustAx = thrust.fx / mass;
     thrustAy = thrust.fy / mass;
     thrustAz = thrust.fz / mass;
     thrustMagnitude = thrustLevel;
+  } else if (
+    (state.phase === 'POWERED_DESCENT' || state.phase === 'SAFE_APPROACH' || state.skyCraneActive || state.poweredDescentActive) &&
+    state.enginesActive &&
+    (state.fuel === undefined || state.fuel > 0) &&
+    !state.grounded
+  ) {
+    // Local spherical coordinate frame
+    const rx = state.x || 0;
+    const ry = (state.y !== undefined ? state.y : altitude) + MARS_RADIUS;
+    const rz = state.z || 0;
+    const rSph = Math.hypot(rx, ry, rz);
+
+    const upX = rx / rSph;
+    const upY = ry / rSph;
+    const upZ = rz / rSph;
+
+    const tanX = -upY;
+    const tanY = upX;
+
+    const gravMag = 4.282837e13 / (rSph * rSph);
+
+    const vRadial = vx * upX + vy * upY + vz * upZ;
+    const vTan = vx * tanX + vy * tanY;
+
+    // Desired radial vertical velocity
+    const desVRadial = altitude > TERMINAL_POWERED_ALTITUDE
+      ? -Math.max(1.8, Math.min(20.0, Math.sqrt(2 * 1.5 * Math.max(0, altitude - TERMINAL_POWERED_ALTITUDE)) + 1.8))
+      : -TOUCHDOWN_NOMINAL_SPEED;
+
+    const reqAccRadial = gravMag + Math.max(-2.5, Math.min(9.0, (desVRadial - vRadial) * 2.5));
+
+    const refX = state.guidanceRefX !== undefined ? state.guidanceRefX : JEZERO_TARGET_X;
+    const refZ = state.guidanceRefZ !== undefined ? state.guidanceRefZ : JEZERO_TARGET_Z;
+    let targetX = refX;
+    let targetZ = refZ;
+    if (state.landingSiteAnalysis?.selectedTarget) {
+      targetX = refX + state.landingSiteAnalysis.selectedTarget.x;
+      targetZ = refZ + state.landingSiteAnalysis.selectedTarget.z;
+    }
+    const errX = targetX - state.x;
+    const errY = (state.guidanceRefY !== undefined ? state.guidanceRefY : state.y) - state.y;
+    const errZ = targetZ - state.z;
+
+    const errTan = errX * tanX + errY * tanY;
+    const distTan = Math.abs(errTan);
+
+    let desVTan = 0;
+    if (altitude > TERMINAL_POWERED_ALTITUDE) {
+      desVTan = Math.sign(errTan) * Math.min(24.0, Math.sqrt(2 * 1.2 * distTan));
+    }
+    const reqAccTan = Math.max(-8.0, Math.min(8.0, (desVTan - vTan) * 2.5));
+
+    let desVZ = 0;
+    if (altitude > TERMINAL_POWERED_ALTITUDE) {
+      desVZ = Math.sign(errZ) * Math.min(8.0, Math.sqrt(2 * 0.8 * Math.abs(errZ)));
+    }
+    const reqAccZ = Math.max(-5.0, Math.min(5.0, (desVZ - vz) * 2.5));
+
+    thrustAx = reqAccRadial * upX + reqAccTan * tanX;
+    thrustAy = reqAccRadial * upY + reqAccTan * tanY;
+    thrustAz = reqAccRadial * upZ + reqAccZ;
+
+    const totalAccel = Math.hypot(thrustAx, thrustAy, thrustAz);
+    thrustMagnitude = mass * totalAccel;
   }
 
-  // Guidance acceleration (Stage 3B-2: lateral only, NEVER modifies ay)
-  // Active during AUTONOMOUS_TARGET_REALIGNMENT and SAFE_APPROACH phases.
+  // Authoritative physical throttle [0.0 to 1.0] across all flight phases
+  if (state.enginesActive && (state.fuel === undefined || state.fuel > 0) && !state.grounded) {
+    if (state.phase === 'DEORBIT_BURN') {
+      state.throttle = 1.0;
+    } else {
+      state.throttle = Math.min(1.0, Math.max(0.18, thrustMagnitude / DESCENT_STAGE_THRUST));
+    }
+  } else {
+    state.throttle = 0.0;
+  }
+
+  // Guidance acceleration (Stage 3B-2: lateral tangent + crossrange for AUTONOMOUS_TARGET_REALIGNMENT)
   let guidanceAx = 0;
+  let guidanceAy = 0;
   let guidanceAz = 0;
   const guidPhase = state.phase;
-  if (guidPhase === 'AUTONOMOUS_TARGET_REALIGNMENT' || guidPhase === 'SAFE_APPROACH') {
+  if (guidPhase === 'AUTONOMOUS_TARGET_REALIGNMENT' || (guidPhase === 'SAFE_APPROACH' && !state.enginesActive)) {
     const g = computeGuidance(state);
     guidanceAx = g.ax;
+    guidanceAy = g.ay || 0;
     guidanceAz = g.az;
   }
 
   // Net acceleration vector
-  //   ax/az: gravity + drag + deorbit thrust + guidance (lateral only)
-  //   ay:    gravity + drag + deorbit thrust            (vertical only – untouched by guidance)
-  const ax = grav.ax + dragAx + thrustAx + guidanceAx;
-  const ay = grav.ay + dragAy + thrustAy;
-  const az = grav.az + dragAz + thrustAz + guidanceAz;
+  res.ax = grav.ax + dragAx + thrustAx + guidanceAx;
+  res.ay = grav.ay + dragAy + thrustAy + guidanceAy;
+  res.az = grav.az + dragAz + thrustAz + guidanceAz;
+  res.rho = rho;
+  res.q = q;
+  res.dragMagnitude = dragMagnitude;
+  res.thrustMagnitude = thrustMagnitude;
+  res.heatFlux = heatFlux;
+  if (!res.wind) res.wind = { x: 0, y: 0, z: 0 };
+  res.wind.x = wind.x;
+  res.wind.y = wind.y;
+  res.wind.z = wind.z;
+  res.relativeSpeed = relativeSpeed;
+  res.groundSpeed = groundSpeed;
 
-  return {
-    ax,
-    ay,
-    az,
-    rho,
-    q,
-    dragMagnitude,
-    thrustMagnitude,
-    heatFlux,
-    wind,
-    relativeSpeed,
-    groundSpeed,
-  };
+  return res;
 }
