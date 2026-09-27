@@ -884,8 +884,6 @@ export default function SimulationCanvas() {
       {/* ── Post-Landing Rover Exploration Mode ── */}
       <ExplorationModePanel
         isActive={explorationModeActive}
-        cameraMode={cameraMode}
-        onCameraChange={handleCameraChange}
         simStateRef={simStateRef}
       />
 

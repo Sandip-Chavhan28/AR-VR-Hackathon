@@ -15,67 +15,7 @@
  *   - Preset IDs handled here map to new cases added in CameraDirector's useFrame.
  */
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-
-// ─── Cinematic Preset Definitions ────────────────────────────────────────────
-export const EXPLORATION_PRESETS = [
-  {
-    id: 'EXPLORE_FREE',
-    label: 'Free Orbit',
-    icon: '🎮',
-    shortcut: 'F',
-    description: 'Mouse drag to orbit · Scroll to zoom · Shift+drag to pan',
-    cameraMode: 'FREE',
-  },
-  {
-    id: 'EXPLORE_FRONT',
-    label: 'Front Profile',
-    icon: '🔭',
-    shortcut: '1',
-    description: 'Direct front-on view of Perseverance rover face',
-    cameraMode: 'EXPLORE_FRONT',
-  },
-  {
-    id: 'EXPLORE_HIGH',
-    label: 'Aerial Overview',
-    icon: '🛸',
-    shortcut: '2',
-    description: 'Elevated top-down view — rover in Jezero crater context',
-    cameraMode: 'EXPLORE_HIGH',
-  },
-  {
-    id: 'EXPLORE_LOW',
-    label: 'Ground Level',
-    icon: '📷',
-    shortcut: '3',
-    description: 'Dramatic low-angle — wheels, regolith, and Martian horizon',
-    cameraMode: 'EXPLORE_LOW',
-  },
-  {
-    id: 'EXPLORE_REAR',
-    label: 'Rear / MMRTG',
-    icon: '⚛️',
-    shortcut: '4',
-    description: 'Rear quarter view showing RTG power source',
-    cameraMode: 'EXPLORE_REAR',
-  },
-  {
-    id: 'EXPLORE_DRAMATIC',
-    label: 'Cinematic Orbit',
-    icon: '🎬',
-    shortcut: '5',
-    description: 'Slow sweeping cinematic orbit — wide angle Martian atmosphere',
-    cameraMode: 'EXPLORE_DRAMATIC',
-  },
-  {
-    id: 'EXPLORE_TOUR',
-    label: '▶ Auto Tour',
-    icon: '🚀',
-    shortcut: 'T',
-    description: 'Automatic cinematic tour cycling through all presets',
-    cameraMode: 'EXPLORE_TOUR',
-  },
-];
+import React, { useState, useEffect } from 'react';
 
 // ─── Rover Fact Cards (shown in the info panel) ───────────────────────────────
 const ROVER_FACTS = [
@@ -89,115 +29,35 @@ const ROVER_FACTS = [
   { label: 'Arm Reach', value: '2.1 m, 5-DOF', icon: '🦾' },
 ];
 
-// ─── Tour sequence (cycles through presets) ───────────────────────────────────
-const TOUR_SEQUENCE = [
-  'EXPLORE_DRAMATIC',
-  'EXPLORE_HIGH',
-  'EXPLORE_FRONT',
-  'EXPLORE_LOW',
-  'EXPLORE_REAR',
-];
-const TOUR_DWELL_MS = 6000; // ms per preset in auto-tour
-
-export default function ExplorationModePanel({ isActive, cameraMode, onCameraChange, simStateRef }) {
-  const [activePreset, setActivePreset] = useState('EXPLORE_DRAMATIC');
-  const [isTourRunning, setIsTourRunning] = useState(false);
-  const [tourIndex, setTourIndex] = useState(0);
+export default function ExplorationModePanel({ isActive, simStateRef }) {
   const [showInfo, setShowInfo] = useState(true);
   const [factIndex, setFactIndex] = useState(0);
-  const tourTimerRef = useRef(null);
-  const factTimerRef = useRef(null);
 
   // ── Fact carousel auto-advance ──────────────────────────────────────────────
   useEffect(() => {
     if (!isActive) return;
-    factTimerRef.current = setInterval(() => {
+    const factTimer = setInterval(() => {
       setFactIndex((i) => (i + 1) % ROVER_FACTS.length);
     }, 4200);
-    return () => clearInterval(factTimerRef.current);
+    return () => clearInterval(factTimer);
   }, [isActive]);
 
-  // ── Auto-tour sequencer ─────────────────────────────────────────────────────
-  const advanceTour = useCallback(() => {
-    setTourIndex((prev) => {
-      const next = (prev + 1) % TOUR_SEQUENCE.length;
-      const nextPreset = TOUR_SEQUENCE[next];
-      setActivePreset(nextPreset);
-      const def = EXPLORATION_PRESETS.find((p) => p.id === nextPreset);
-      if (def) onCameraChange(def.cameraMode);
-      return next;
-    });
-  }, [onCameraChange]);
-
-  useEffect(() => {
-    if (isTourRunning && isActive) {
-      tourTimerRef.current = setInterval(advanceTour, TOUR_DWELL_MS);
-    } else {
-      clearInterval(tourTimerRef.current);
-    }
-    return () => clearInterval(tourTimerRef.current);
-  }, [isTourRunning, isActive, advanceTour]);
-
-  // ── Keyboard shortcuts for presets ─────────────────────────────────────────
+  // ── Keyboard shortcut for info panel ───────────────────────────────────────
   useEffect(() => {
     if (!isActive) return;
     const handleKey = (e) => {
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
-
-      const keyMap = {
-        'f': 'EXPLORE_FREE', 'F': 'EXPLORE_FREE',
-        '1': 'EXPLORE_FRONT',
-        '2': 'EXPLORE_HIGH',
-        '3': 'EXPLORE_LOW',
-        '4': 'EXPLORE_REAR',
-        '5': 'EXPLORE_DRAMATIC',
-        't': 'EXPLORE_TOUR', 'T': 'EXPLORE_TOUR',
-        'i': null, 'I': null, // toggle info
-      };
-
       if (e.key === 'i' || e.key === 'I') {
         e.preventDefault();
         setShowInfo((v) => !v);
-        return;
       }
-
-      const presetId = keyMap[e.key];
-      if (!presetId) return;
-      e.preventDefault();
-      handleSelectPreset(presetId);
     };
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isActive]);
-
-  const handleSelectPreset = useCallback((presetId) => {
-    setActivePreset(presetId);
-
-    if (presetId === 'EXPLORE_TOUR') {
-      setIsTourRunning((prev) => {
-        const next = !prev;
-        if (next) {
-          // Start tour from first preset immediately
-          const firstPreset = TOUR_SEQUENCE[0];
-          setTourIndex(0);
-          setActivePreset(firstPreset);
-          const def = EXPLORATION_PRESETS.find((p) => p.id === firstPreset);
-          if (def) onCameraChange(def.cameraMode);
-        }
-        return next;
-      });
-      return;
-    }
-
-    setIsTourRunning(false);
-    const def = EXPLORATION_PRESETS.find((p) => p.id === presetId);
-    if (def) onCameraChange(def.cameraMode);
-  }, [onCameraChange]);
 
   if (!isActive) return null;
 
-  const currentPreset = EXPLORATION_PRESETS.find((p) => p.id === activePreset) || EXPLORATION_PRESETS[0];
   const currentFact = ROVER_FACTS[factIndex];
   const s = simStateRef?.current;
 
@@ -262,107 +122,6 @@ export default function ExplorationModePanel({ isActive, cameraMode, onCameraCha
         >
           [I] INFO
         </button>
-      </div>
-
-      {/* ── Camera Preset Switcher Bar ────────────────────────────────────── */}
-      <div
-        className="hud-panel"
-        style={{
-          position: 'absolute',
-          bottom: '130px',
-          left: '50%',
-          transform: 'translateX(-50%)',
-          background: 'rgba(5,12,22,0.90)',
-          border: '1px solid rgba(0,230,120,0.30)',
-          borderRadius: '12px',
-          padding: '10px 14px',
-          display: 'flex',
-          gap: '8px',
-          alignItems: 'center',
-          zIndex: 220,
-          backdropFilter: 'blur(12px)',
-          boxShadow: '0 0 32px rgba(0,230,120,0.10)',
-          userSelect: 'none',
-        }}
-      >
-        {/* Label */}
-        <div style={{
-          color: '#475569',
-          fontSize: '9px',
-          fontFamily: 'monospace',
-          letterSpacing: '0.12em',
-          writingMode: 'vertical-lr',
-          textOrientation: 'mixed',
-          transform: 'rotate(180deg)',
-          marginRight: '2px',
-        }}>
-          VIEW
-        </div>
-
-        {/* Preset Buttons */}
-        {EXPLORATION_PRESETS.map((preset) => {
-          const isSelected = activePreset === preset.id;
-          const isTourBtn = preset.id === 'EXPLORE_TOUR';
-          const isTourActive = isTourBtn && isTourRunning;
-
-          return (
-            <button
-              key={preset.id}
-              onClick={() => handleSelectPreset(preset.id)}
-              title={`${preset.label}: ${preset.description}\nShortcut: [${preset.shortcut}]`}
-              style={{
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                gap: '4px',
-                padding: '8px 12px',
-                background: isSelected || isTourActive
-                  ? 'linear-gradient(135deg, rgba(0,230,120,0.22) 0%, rgba(0,180,90,0.15) 100%)'
-                  : 'rgba(255,255,255,0.04)',
-                border: `1px solid ${isSelected || isTourActive ? 'rgba(0,230,120,0.65)' : 'rgba(255,255,255,0.10)'}`,
-                borderRadius: '8px',
-                color: isSelected || isTourActive ? '#00e676' : '#64748b',
-                cursor: 'pointer',
-                fontFamily: 'monospace',
-                fontSize: '18px',
-                minWidth: '52px',
-                transition: 'all 0.2s ease',
-                boxShadow: isSelected || isTourActive ? '0 0 12px rgba(0,230,120,0.25)' : 'none',
-                animation: isTourActive ? 'tourPulse 2s ease-in-out infinite' : 'none',
-              }}
-            >
-              <span style={{ fontSize: '18px' }}>{preset.icon}</span>
-              <span style={{ fontSize: '9px', letterSpacing: '0.06em', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>
-                {isTourActive ? '⏸ Stop' : preset.label.replace('▶ ', '')}
-              </span>
-              <span style={{ fontSize: '8px', color: isSelected ? 'rgba(0,230,120,0.6)' : '#334155' }}>
-                [{preset.shortcut}]
-              </span>
-            </button>
-          );
-        })}
-      </div>
-
-      {/* ── Active Preset Description ─────────────────────────────────────── */}
-      <div
-        style={{
-          position: 'absolute',
-          bottom: '68px',
-          left: '50%',
-          transform: 'translateX(-50%)',
-          color: '#475569',
-          fontSize: '10px',
-          fontFamily: 'monospace',
-          textAlign: 'center',
-          zIndex: 199,
-          pointerEvents: 'none',
-          letterSpacing: '0.05em',
-        }}
-      >
-        {isTourRunning
-          ? '🎬 Auto-Tour Running — press [T] or click Stop to exit'
-          : `${currentPreset.icon} ${currentPreset.description}`
-        }
       </div>
 
       {/* ── Rover Info Panel ─────────────────────────────────────────────── */}
@@ -507,56 +266,8 @@ export default function ExplorationModePanel({ isActive, cameraMode, onCameraCha
             </div>
           ))}
 
-          {/* Controls hint */}
-          <div style={{
-            marginTop: '10px',
-            paddingTop: '8px',
-            borderTop: '1px solid rgba(255,255,255,0.06)',
-            color: '#334155',
-            fontSize: '9px',
-            lineHeight: '1.6',
-          }}>
-            🖱 Drag to orbit · Scroll to zoom · Shift+drag to pan<br />
-            ⌨ [1–5] Switch preset · [T] Tour · [I] Toggle info
-          </div>
         </div>
       )}
-
-      {/* ── Tour progress indicator ───────────────────────────────────────── */}
-      {isTourRunning && (
-        <div style={{
-          position: 'absolute',
-          bottom: '155px',
-          left: '50%',
-          transform: 'translateX(-50%)',
-          display: 'flex',
-          gap: '6px',
-          alignItems: 'center',
-          zIndex: 201,
-          pointerEvents: 'none',
-        }}>
-          {TOUR_SEQUENCE.map((id, i) => (
-            <div
-              key={id}
-              style={{
-                width: i === tourIndex ? '20px' : '6px',
-                height: '6px',
-                borderRadius: '3px',
-                background: i === tourIndex ? '#00e676' : 'rgba(0,230,120,0.25)',
-                transition: 'all 0.4s ease',
-              }}
-            />
-          ))}
-        </div>
-      )}
-
-      {/* Tour-pulse keyframe animation */}
-      <style>{`
-        @keyframes tourPulse {
-          0%, 100% { box-shadow: 0 0 8px rgba(0,230,120,0.3); }
-          50% { box-shadow: 0 0 20px rgba(0,230,120,0.65); }
-        }
-      `}</style>
     </>
   );
 }
