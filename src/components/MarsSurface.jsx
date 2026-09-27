@@ -359,7 +359,7 @@ function MediumMolaTerrain({ regolithTexture, regolithBump }) {
   const geometry = useMemo(() => {
     const size = 60; // 60 render units = 60 km
     const outerRadius = size / 2; // 30 render units = 30 km
-    const innerRadius = 560 * RENDER_SCALE; // 0.56 render units = 560m (seamlessly meets 600m local landing mesh)
+    const innerRadius = 600 * RENDER_SCALE; // Match the 600m local mesh edge without overlapping faces
     const geo = createRadialGridGeometry(outerRadius, 64, 128, innerRadius);
     const positions = geo.attributes.position;
     const colors = new Float32Array(positions.count * 3);

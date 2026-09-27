@@ -39,6 +39,8 @@ import {
 
 const MARS_R_RENDER = MARS_RADIUS * RENDER_SCALE; // 3389.5
 const MARS_CY = -MARS_R_RENDER;
+const CLOSE_CAMERA_NEAR = 0.00005;
+const PLANET_CAMERA_NEAR = 0.005;
 
 export default function CameraDirector({ simStateRef, accumRef, cameraMode = 'CHASE', cameraRef, zoomFactor = 1.0 }) {
   const { camera, scene } = useThree();
@@ -629,6 +631,16 @@ export default function CameraDirector({ simStateRef, accumRef, cameraMode = 'CH
     let desiredZ = lookTarget.z + currentOffset.current.z;
 
     [desiredX, desiredY, desiredZ] = safeClamp(desiredX, desiredY, desiredZ);
+
+    const cameraDistance = Math.hypot(desiredX - lookTarget.x, desiredY - lookTarget.y, desiredZ - lookTarget.z);
+    const planetVisible = !isLanded && altKm >= 14;
+    const nextNear = planetVisible
+      ? Math.max(CLOSE_CAMERA_NEAR, Math.min(PLANET_CAMERA_NEAR, cameraDistance * 0.4))
+      : CLOSE_CAMERA_NEAR;
+    if (Math.abs(camera.near - nextNear) > 1e-7) {
+      camera.near = nextNear;
+      camera.updateProjectionMatrix();
+    }
 
     camera.position.set(desiredX, desiredY, desiredZ);
 
