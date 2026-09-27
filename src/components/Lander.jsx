@@ -43,7 +43,7 @@ import {
 import Parachute from './Parachute';
 import EntryPlasmaFX from './EntryPlasmaFX';
 import RoverModel, { ROVER_BRIDLE_LUGS, ROVER_WHEEL_CONTACT_Y, ROVER_WHEEL_COORDS } from './RoverModel';
-import { writeInterpolatedVehicleWorldPosition } from './vehicleRenderFrame.js';
+import { appendTrajectoryPosition, rebaseTrajectoryPath, writeInterpolatedVehicleWorldPosition } from './vehicleRenderFrame.js';
 
 // Canted MLE descent rocket engine clusters (4 corners, canted outwards at 20 deg)
 const MLE_ENGINE_CONFIGS = [
@@ -54,6 +54,10 @@ const MLE_ENGINE_CONFIGS = [
 ];
 
 const SKY_CRANE_CABLE_LENGTH = 7.5;
+const CRUISE_SEPARATION_SECONDS = 2.4;
+const HEAT_SHIELD_SEPARATION_SECONDS = 2.0;
+const CRUISE_RELEASE_IMPULSE_MPS = 12;
+const HEAT_SHIELD_RELEASE_IMPULSE_MPS = 10;
 const SKY_CRANE_ATTACHMENTS = [
   { x: -0.58, z: 0.58 },
   { x: 0.58, z: 0.58 },
@@ -61,10 +65,33 @@ const SKY_CRANE_ATTACHMENTS = [
   { x: 0.58, z: -0.58 },
 ];
 
-export default function Lander({ simStateRef, accumRef, viewMode = 'normal', explodedFactor = 0.0, selectedComponent }) {
+export default function Lander({ simStateRef, accumRef, trajectoryPathRef, onSeparationLabel, viewMode = 'normal', explodedFactor = 0.0, selectedComponent }) {
   const mainGroupRef         = useRef();
   const attachedCruiseRef    = useRef();
   const driftingCruiseRef    = useRef();
+  const cruiseSeparationVisual = useRef({
+    started: false,
+    completed: false,
+    progress: 0,
+    elapsed: 0,
+    lastSimTime: 0,
+    position: new THREE.Vector3(),
+    velocity: new THREE.Vector3(),
+    impulse: new THREE.Vector3(),
+    orientation: new THREE.Quaternion(),
+  });
+  const heatShieldSeparationVisual = useRef({
+    started: false,
+    completed: false,
+    progress: 0,
+    elapsed: 0,
+    lastSimTime: 0,
+    position: new THREE.Vector3(),
+    velocity: new THREE.Vector3(),
+    impulse: new THREE.Vector3(),
+    gravity: new THREE.Vector3(),
+    orientation: new THREE.Quaternion(),
+  });
   const attachedShieldRef    = useRef();
   const fallingShieldRef     = useRef();
   const attachedBackshellRef = useRef();
@@ -92,6 +119,9 @@ export default function Lander({ simStateRef, accumRef, viewMode = 'normal', exp
   const _wheelLocalPosition = useRef(new THREE.Vector3());
   const _cableDirection = useRef(new THREE.Vector3());
   const _cableUp = useRef(new THREE.Vector3(0, 1, 0));
+  const _cruiseStageLocalOffset = useRef(new THREE.Vector3(0, 2.15 * RENDER_SCALE, 0));
+  const _heatShieldAttachedPosition = useRef(new THREE.Vector3());
+  const _heatShieldLocalOffset = useRef(new THREE.Vector3(0, -0.52 * RENDER_SCALE, 0));
   const _up = useRef(new THREE.Vector3(0, 1, 0));
   const _euler = useRef(new THREE.Euler(0, 0, 0, 'YXZ'));
   const _lastUseSurface = useRef(null);
@@ -273,6 +303,10 @@ export default function Lander({ simStateRef, accumRef, viewMode = 'normal', exp
       (isLanded || isSettling || useSurface) ? renderY : undefined,
     );
     mainGroupRef.current.position.copy(_surfacePosition.current);
+    if (useSurface && _lastUseSurface.current === false) {
+      rebaseTrajectoryPath(trajectoryPathRef, mainGroupRef.current.position);
+    }
+    appendTrajectoryPosition(trajectoryPathRef, mainGroupRef.current.position);
 
     if (typeof window !== 'undefined') {
       window.__EDL_LANDER_DEBUG__ = {
@@ -341,22 +375,70 @@ export default function Lander({ simStateRef, accumRef, viewMode = 'normal', exp
     // ── 4. Cruise Stage Staging ──────────────────────────────────────────────
     const isCruiseSep = !!s.cruiseStageSeparated;
     const isPreEntry = s.phase === 'MARS_ORBIT' || s.phase === 'DEORBIT_BURN' || s.phase === 'COAST_TO_ENTRY';
-    const isCruiseAttached = (s.phase === 'MARS_ORBIT' || s.phase === 'DEORBIT_BURN') && !isCruiseSep && !isLanded;
+    const cruiseVisual = cruiseSeparationVisual.current;
+    const isCruiseAttached = isPreEntry && !isCruiseSep && !isLanded;
     if (attachedCruiseRef.current) {
       attachedCruiseRef.current.visible = isCruiseAttached;
     }
     if (driftingCruiseRef.current) {
-      if (isCruiseSep && s.cruiseStagePos && !isLanded && (s.altitude || 0) > 35000) {
-        driftingCruiseRef.current.visible = true;
-        driftingCruiseRef.current.position.set(
-          s.cruiseStagePos.x * RENDER_SCALE,
-          renderBodyY(s.cruiseStagePos),
-          (s.cruiseStagePos.z || 0) * RENDER_SCALE
-        );
-        driftingCruiseRef.current.rotation.x += delta * 0.4;
-        driftingCruiseRef.current.rotation.y += delta * 0.2;
-      } else {
+      if (!isCruiseSep) {
+        cruiseVisual.started = false;
+        cruiseVisual.completed = false;
+        cruiseVisual.progress = 0;
+        cruiseVisual.elapsed = 0;
+        cruiseVisual.lastSimTime = 0;
         driftingCruiseRef.current.visible = false;
+      } else {
+        const renderTime = s.elapsed + Math.max(0, accumRef?.current || 0);
+        if (cruiseVisual.started && renderTime < cruiseVisual.lastSimTime) {
+          cruiseVisual.started = false;
+          cruiseVisual.completed = false;
+          cruiseVisual.progress = 0;
+          cruiseVisual.elapsed = 0;
+        }
+
+        const canStartCruiseSeparation = s.phase === 'COAST_TO_ENTRY' && !isLanded;
+        if (!cruiseVisual.started && canStartCruiseSeparation) {
+          _cruiseStageLocalOffset.current
+            .set(0, 2.15 * RENDER_SCALE, 0)
+            .applyQuaternion(mainGroupRef.current.quaternion);
+          cruiseVisual.position.copy(mainGroupRef.current.position).add(_cruiseStageLocalOffset.current);
+          cruiseVisual.orientation.copy(mainGroupRef.current.quaternion);
+          cruiseVisual.velocity.set(s.vx || 0, s.vy || 0, s.vz || 0);
+          if (useSurface) cruiseVisual.velocity.applyQuaternion(MARS_SURFACE_FRAME.rotation);
+          cruiseVisual.velocity.multiplyScalar(RENDER_SCALE);
+          cruiseVisual.impulse.copy(_cruiseStageLocalOffset.current)
+            .normalize()
+            .multiplyScalar(CRUISE_RELEASE_IMPULSE_MPS * RENDER_SCALE);
+          cruiseVisual.elapsed = 0;
+          cruiseVisual.progress = 0;
+          cruiseVisual.lastSimTime = renderTime;
+          cruiseVisual.started = true;
+          cruiseVisual.completed = false;
+          onSeparationLabel?.('CRUISE STAGE SEPARATING');
+          if (attachedCruiseRef.current) attachedCruiseRef.current.visible = false;
+        }
+
+        if (cruiseVisual.started) {
+          const simDelta = Math.max(0, renderTime - cruiseVisual.lastSimTime);
+          cruiseVisual.lastSimTime = renderTime;
+          const impulseDelta = Math.min(simDelta, Math.max(0, CRUISE_SEPARATION_SECONDS - cruiseVisual.elapsed));
+          cruiseVisual.velocity.addScaledVector(cruiseVisual.impulse, impulseDelta / CRUISE_SEPARATION_SECONDS);
+          cruiseVisual.position.addScaledVector(cruiseVisual.velocity, simDelta);
+          cruiseVisual.elapsed += simDelta;
+          cruiseVisual.progress = Math.min(1, cruiseVisual.elapsed / CRUISE_SEPARATION_SECONDS);
+
+          if (cruiseVisual.progress >= 1 && !cruiseVisual.completed) {
+            cruiseVisual.completed = true;
+            onSeparationLabel?.('CRUISE STAGE JETTISONED');
+          }
+
+          driftingCruiseRef.current.visible = true;
+          driftingCruiseRef.current.position.copy(cruiseVisual.position);
+          driftingCruiseRef.current.quaternion.copy(cruiseVisual.orientation);
+          driftingCruiseRef.current.rotateX(cruiseVisual.elapsed * 0.08);
+          driftingCruiseRef.current.rotateZ(cruiseVisual.elapsed * 0.05);
+        }
       }
     }
 
@@ -375,20 +457,79 @@ export default function Lander({ simStateRef, accumRef, viewMode = 'normal', exp
       attachedShieldRef.current.visible = isShieldAttached;
     }
     if (fallingShieldRef.current) {
-      const sepT = s.heatShieldSepTime !== undefined ? Math.max(0, s.elapsed - s.heatShieldSepTime) : 999;
-      // Visible while dropping away cleanly below lander for ~4.5 seconds, and only during parachute phase
-      if (isShieldSep && sepT < 4.5 && !isLanded && !isPowered && (s.altitude || 0) > 800) {
-        const fallDist = 0.52 + (2.8 * sepT) + (0.9 * sepT * sepT);
-        fallingShieldRef.current.visible = true;
-        fallingShieldRef.current.position.set(
-          (physX * RENDER_SCALE) + (0.45 * sepT),
-          renderY - fallDist,
-          (physZ * RENDER_SCALE) + (0.15 * sepT)
-        );
-        fallingShieldRef.current.rotation.x += delta * 0.8;
-        fallingShieldRef.current.rotation.z += delta * 0.5;
-      } else {
+      const visual = heatShieldSeparationVisual.current;
+      const renderTime = s.elapsed + Math.max(0, accumRef?.current || 0);
+      const atShieldJettisonPhase = s.phase === 'PARACHUTE_DESCENT' && (s.altitude || 0) > 5000 && (s.altitude || 0) <= 9000;
+      const separationEventActive = isShieldSep && (
+        Number.isFinite(s.heatShieldSepTime) || atShieldJettisonPhase
+      );
+
+      if (!isShieldSep) {
+        visual.started = false;
+        visual.completed = false;
+        visual.progress = 0;
+        visual.elapsed = 0;
+        visual.lastSimTime = 0;
         fallingShieldRef.current.visible = false;
+      } else {
+        if (visual.started && renderTime < visual.lastSimTime) {
+          visual.started = false;
+          visual.completed = false;
+          visual.progress = 0;
+          visual.elapsed = 0;
+        }
+
+        if (!visual.started && separationEventActive) {
+          visual.started = true;
+          visual.completed = false;
+          visual.progress = 0;
+          visual.elapsed = 0;
+          visual.lastSimTime = renderTime;
+          _heatShieldLocalOffset.current
+            .set(0, -0.52 * RENDER_SCALE, 0)
+            .applyQuaternion(mainGroupRef.current.quaternion);
+          _heatShieldAttachedPosition.current
+            .copy(mainGroupRef.current.position)
+            .add(_heatShieldLocalOffset.current);
+          visual.position.copy(_heatShieldAttachedPosition.current);
+          visual.orientation.copy(mainGroupRef.current.quaternion);
+          visual.velocity.set(s.vx || 0, s.vy || 0, s.vz || 0);
+          if (useSurface) visual.velocity.applyQuaternion(MARS_SURFACE_FRAME.rotation);
+          visual.velocity.multiplyScalar(RENDER_SCALE);
+          visual.impulse.copy(_heatShieldLocalOffset.current)
+            .normalize()
+            .multiplyScalar(HEAT_SHIELD_RELEASE_IMPULSE_MPS * RENDER_SCALE);
+          if (useSurface) {
+            visual.gravity.copy(MARS_SURFACE_FRAME.up).multiplyScalar(-3.71 * RENDER_SCALE);
+          } else {
+            visual.gravity.set(0, -3.71 * RENDER_SCALE, 0);
+          }
+          onSeparationLabel?.('HEAT SHIELD SEPARATING');
+        }
+
+        if (visual.started) {
+          const simDelta = Math.max(0, renderTime - visual.lastSimTime);
+          visual.lastSimTime = renderTime;
+          const impulseDelta = Math.min(simDelta, Math.max(0, HEAT_SHIELD_SEPARATION_SECONDS - visual.elapsed));
+          visual.velocity.addScaledVector(visual.impulse, impulseDelta / HEAT_SHIELD_SEPARATION_SECONDS);
+          visual.velocity.addScaledVector(visual.gravity, simDelta);
+          visual.position.addScaledVector(visual.velocity, simDelta);
+          visual.elapsed += simDelta;
+          visual.progress = Math.min(1, visual.elapsed / HEAT_SHIELD_SEPARATION_SECONDS);
+
+          if (visual.progress >= 1 && !visual.completed) {
+            visual.completed = true;
+            onSeparationLabel?.('HEAT SHIELD JETTISONED');
+          }
+
+          fallingShieldRef.current.visible = true;
+          fallingShieldRef.current.position.copy(visual.position);
+          fallingShieldRef.current.quaternion.copy(visual.orientation);
+          fallingShieldRef.current.rotateX(visual.elapsed * 0.11);
+          fallingShieldRef.current.rotateZ(visual.elapsed * 0.07);
+        } else {
+          fallingShieldRef.current.visible = false;
+        }
       }
     }
 
@@ -780,6 +921,9 @@ export default function Lander({ simStateRef, accumRef, viewMode = 'normal', exp
         </mesh>
         <mesh material={heatShieldMaterial}>
           <torusGeometry args={[2.13, 0.055, 6, 32]} />
+        </mesh>
+        <mesh position={[0, 0.04, 0]} material={heatShieldMaterial}>
+          <cylinderGeometry args={[2.20, 2.20, 0.08, 48]} />
         </mesh>
       </group>
 

@@ -15,7 +15,7 @@ A high-fidelity, interactive 3D Mars EDL mission simulator faithful to the NASA/
 2. **NASA Eyes Visual Hierarchy & Left Storytelling Panel:** Large event heading, primary 3 telemetry metrics (distance from landing site, altitude, velocity) with instant Metric ⇄ Imperial conversion, factual aerospace mission narrative, dynamic countdown to touchdown, next phase lookahead, and "Scroll for next phase ↓" interaction cue.
 3. **NASA Eyes Bottom Playback & Scrubber Bar:** Edge-anchored control bar with `↺ REPLAY`, real mission timestamp (`FEB 18, 2021 | UTC`), Mission Elapsed Time (`MET T- / T+`), `▶ / ⏸` Play/Pause toggle, speed selectors ($0.5\times, 1\times, 5\times, 10\times, 50\times$), and 13 interconnected milestone nodes.
 4. **Floating 3D Spatial World Labels:** Screen-projected spatial markers anchored to Perseverance Rover, Jezero Crater Target, Heat Shield impact site, Backshell & Chute, and Descent Stage crash site with distance-based fading and frustum culling — zero React re-renders via direct DOM mutation.
-5. **Full Physical Spacecraft Staging:** Annular Cruise Stage detachment, hypersonic aeroshell, physical heat shield separation, panelized Disk-Gap-Band parachute deployment, backshell jettison, 8 canted hydrazine thrusters with dynamic plumes, 4-point Sky Crane tether cables lowering the rover chassis, touchdown cable severance, and descent stage flyaway trajectory.
+5. **Full Physical Spacecraft Staging:** Smooth, labeled Cruise Stage separation and Heat Shield jettison driven by their existing EDL states, hypersonic aeroshell, panelized Disk-Gap-Band parachute deployment, backshell jettison, 8 canted hydrazine thrusters with dynamic plumes, 4-point Sky Crane tether cables lowering the rover chassis, touchdown cable severance, and descent stage flyaway trajectory.
 6. **Full Interactive Camera System (9 modes + free orbit):** Smooth cinematic perspectives with mouse orbit (left drag), right-drag pan, scroll-wheel zoom, double-click scene focus, keyboard flight (W/A/S/D/Q/E), camera-mode hotkeys (1–8), R (reset pan), F (refocus), dedicated parachute and sky-crane framing, and anti-clipping terrain & vehicle bounding.
 7. **Accurate Landing Site Terrain:** Jezero Crater multi-scale procedural terrain anchored at the actual Mars 2020 landing site (local offset 513.8 render units); craters Alpha/Beta/Gamma with raised rims and ejecta blankets; 180-boulder instanced rock field with vertex perturbation; 6-color Martian mineral palette; ELEV_EXAGGERATION×30 for visual clarity.
 8. **Deep Technical Telemetry Drawer:** Live Mach, dynamic pressure ($q$), G-force deceleration meter, Sutton-Graves stagnation heat flux, hydrazine propellant gauge, and subsystem status indicators.
@@ -73,10 +73,11 @@ A high-fidelity, interactive 3D Mars EDL mission simulator faithful to the NASA/
 
 ### Core Features
 
-- Full-Viewport Cinematic Startup Mission Briefing: fixed-overlay entry experience with dark blurred radial backdrop, centered mission specs and interaction guide card, auto-focused initialize button, and clean zero-layout-shift reveal
-- Right-Side Navigation Toolbar View Selector: dedicated `👁 VIEW` toggle directly below `DEMO` opening an adjacent mission-control camera selector menu (Free Orbit `[F]`, Front Profile `[1]`, Aerial Overview `[2]`, Ground Level `[3]`, Rear/MMRTG `[4]`, Cinematic Orbit `[5]`, Auto Tour `[T]`) with active preset highlight, ESC/click-outside dismiss, and seamless CameraDirector transitions
-- Authoritative World Transform Pipeline (`marsSurfaceFrame.js`): mathematically unified reference coordinate system guaranteeing identical spacecraft positions across Lander mesh, CameraDirector tracking, scene directional lighting, and developer diagnostics overlay
-- Temporal Camera Stability & Zero-Jitter Collision Engine: eliminated render-scale sub-centimeter envelope collapse and restricted global planet clamps to orbital altitudes ($\ge 12\text{ km}$), delivering rock-solid sub-meter framing of Perseverance without high-frequency 60Hz push/pull oscillation
+- Full-Viewport Cinematic Startup Mission Briefing: fixed-overlay entry experience with mission specs, interaction guide, and initialize control
+- Right-Side Navigation Toolbar View Selector: camera presets with active-state highlight, click-outside dismissal, and keyboard shortcuts
+- Authoritative World Transform Pipeline (`marsSurfaceFrame.js`): shared vehicle coordinate mapping for Lander, CameraDirector, lighting, and diagnostics
+- Temporal Camera Stability & Zero-Jitter Collision Engine: stable vehicle framing with terrain and planetary collision constraints
+- Unified descent trajectory line: records the rendered rover root used by Sky Crane lowering and touchdown; `PATH ON/OFF` changes only visibility while path capture continues
 
 - 3-DoF symplectic Euler translational dynamics with fixed $\Delta t = 0.05\text{ s}$ frame-rate independent accumulator
 - Exponential Martian atmosphere model: $\rho(h) = \rho_0 \cdot \exp(-h/H)$
@@ -148,9 +149,9 @@ A high-fidelity, interactive 3D Mars EDL mission simulator faithful to the NASA/
 - `src/components/MarsGlobe.jsx`: Procedural Mars planetary sphere with 2048×1024 equirectangular albedo texture and 1024×512 relief bump map (Syrtis Major, Isidis, Jezero, Valles Marineris, Olympus Mons, Hellas Basin, polar ice caps, 450 craters, wind streaks) and custom atmospheric limb Fresnel shader with cyan Rayleigh upper limb
 - `src/components/MarsSurface.jsx`: Multi-scale terrain (60 km MOLA Jezero crop + 500 km regional horizon), slope-dependent rock exposure, 512×512 seamless regolith sand ripple detail map, and 220 weathered instanced boulders
 - `src/components/LandingSiteGrid.jsx`: Terrain-conforming safety hazard cells and target markers
-- `src/components/OrbitalTrajectory.jsx`: Orbital rings and dynamic phase-color-coded flight trail
+- `src/components/OrbitalTrajectory.jsx`: The single phase-colored trajectory line rendered from the shared rover-root path buffer; `PATH ON/OFF` changes visibility only while path capture remains active
 - `src/components/StarField.jsx`: 1200-star celestial sphere
-- `src/components/Lander.jsx`: Staged spacecraft with an opaque aeroshell through entry/parachute descent, phase-gated single-rover reveal, four endpoint-aligned Sky Crane cables matching the 7.5 m simulation extension, and MOLA-fitted touchdown placement
+- `src/components/Lander.jsx`: Staged spacecraft with gradual labeled Cruise Stage and Heat Shield separation visuals driven by existing EDL state, opaque aeroshell through entry/parachute descent, phase-gated single-rover reveal, four endpoint-aligned Sky Crane cables matching the 7.5 m simulation extension, MOLA-fitted touchdown placement, and the sole writer of rendered rover trajectory samples
 - `src/components/RoverModel.jsx`: Single procedural Mars 2020 Perseverance model (WEB chassis, 6 wheels with 48 curved chevron grousers each, mast/cameras, antennae, 5-DOF arm/turret, MMRTG) with per-frame terrain-driven wheel and rocker-bogie transforms
 - `src/components/Parachute.jsx`: Supersonic DGB parachute with multi-stage deployment (unspooling, radial billowing, wind-shear flutter) and post-touchdown deflation
 - `src/components/EntryPlasmaFX.jsx`: Hypersonic compression shockwave cone and ionization wake
@@ -206,18 +207,19 @@ A high-fidelity, interactive 3D Mars EDL mission simulator faithful to the NASA/
    - Click **Powered Descent** to see the backshell separate and canted thrusters ignite
    - Click **Touchdown** to watch the Sky Crane tether cables lower the rover and see the Flight Evaluation Report
 7. Scroll the mouse wheel down anywhere to advance to the next phase ("Scroll for next phase ↓")
-8. **Right Toolbar Camera / View Selector (`👁 VIEW`):**
+8. Use the right-side `PATH ON/OFF` control to show or hide the trajectory line without changing the mission or path collection.
+9. **Right Toolbar Camera / View Selector (`👁 VIEW`):**
    - Click the **`👁 VIEW`** button located directly below **`DEMO`** on the right-side vertical toolbar.
    - An adjacent dark mission-control menu will open showing all 7 camera presets: `FREE ORBIT [F]`, `FRONT PROFILE [1]`, `AERIAL OVERVIEW [2]`, `GROUND LEVEL [3]`, `REAR / MMRTG [4]`, `CINEMATIC ORBIT [5]`, and `AUTO TOUR [T]`.
    - Click any preset or press its shortcut key to transition smoothly to that perspective with active highlight.
    - Click `👁 VIEW` again, click outside, or press `ESC` to close the selector.
-9. **Interactive Camera Controls** (in any mode):
+10. **Interactive Camera Controls** (in any mode):
    - **Left-drag**: Orbit camera around spacecraft
    - **Right-drag** or **Shift+drag**: Pan camera laterally
    - **Scroll wheel**: Zoom in/out
    - `W`/`S`: Zoom in/out; `A`/`D`: Orbit left/right; `Q`/`E`: Orbit up/down
    - `R`: Reset pan offset; `F`: Refocus on spacecraft
-10. Use keyboard shortcuts:
+11. Use keyboard shortcuts:
    - `Space`: Play / Pause flight
    - `U`: Toggle units (Metric ⇄ Imperial)
    - `P`: Toggle Presentation Mode (clean cinematic view)

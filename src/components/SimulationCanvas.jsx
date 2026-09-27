@@ -43,7 +43,7 @@ import { createInitialState, tickSimulation } from '../simulation/simulationStat
 import { RENDER_SCALE, JEZERO_TARGET_X, JEZERO_TARGET_Z } from '../simulation/physics/constants.js';
 import { getTerrainRenderHeight } from '../simulation/landingSite/terrain.js';
 import { MARS_SURFACE_FRAME } from './marsSurfaceFrame.js';
-import { writeInterpolatedVehicleWorldPosition } from './vehicleRenderFrame.js';
+import { createTrajectoryPath, writeInterpolatedVehicleWorldPosition } from './vehicleRenderFrame.js';
 import { EDL_MILESTONES, jumpToMilestone, detectMilestone } from '../simulation/missionEvents.js';
 import {
   sounds,
@@ -325,11 +325,14 @@ export default function SimulationCanvas() {
     window.__SIM_STATE_REF__ = simStateRef;
   }
   const accumRef = useRef(0);
+  const trajectoryPathRef = useRef(createTrajectoryPath());
   const cameraRef = useRef(null);
   const webGLStatsRef = useRef({ fps: 60, frameTimeMs: 16.6, drawCalls: 0, triangles: 0, geometries: 0, textures: 0 });
 
   const [introOpen, setIntroOpen] = useState(true);
   const [running, setRunning] = useState(false);
+  const [trajectoryVisible, setTrajectoryVisible] = useState(true);
+  const [roverInspectionOpen, setRoverInspectionOpen] = useState(false);
   const [cameraMode, setCameraMode] = useState('CHASE');
   const [zoomFactor, setZoomFactor] = useState(1.0);
   const [timeScale, setTimeScale] = useState(1);
@@ -341,6 +344,7 @@ export default function SimulationCanvas() {
   const [resultModalOpen, setResultModalOpen] = useState(false);
   const [muted, setMutedState] = useState(() => sounds.isMuted());
   const [activeMilestone, setActiveMilestone] = useState(null);
+  const [separationLabel, setSeparationLabel] = useState(null);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   // Post-landing exploration mode — activates automatically after phase === 'LANDED'
   const [explorationModeActive, setExplorationModeActive] = useState(false);
@@ -354,6 +358,17 @@ export default function SimulationCanvas() {
   const prevMilestoneIdRef = useRef('ORBIT');
   const resultModalShownRef = useRef(false);
   const lastScrollTime = useRef(0);
+  const separationLabelTimerRef = useRef(null);
+
+  const handleSeparationLabel = useCallback((label) => {
+    setSeparationLabel(label);
+    if (separationLabelTimerRef.current) clearTimeout(separationLabelTimerRef.current);
+    separationLabelTimerRef.current = setTimeout(() => setSeparationLabel(null), 2400);
+  }, []);
+
+  useEffect(() => () => {
+    if (separationLabelTimerRef.current) clearTimeout(separationLabelTimerRef.current);
+  }, []);
 
   // Play / Pause toggle
   const handleTogglePlay = useCallback(() => {
@@ -368,7 +383,10 @@ export default function SimulationCanvas() {
   // Reset simulation
   const handleReset = useCallback(() => {
     sounds.reset();
+    if (separationLabelTimerRef.current) clearTimeout(separationLabelTimerRef.current);
+    setSeparationLabel(null);
     simStateRef.current = createInitialState();
+    trajectoryPathRef.current = createTrajectoryPath();
     simStateRef.current.timeScale = timeScale;
     simStateRef.current.mode = mode;
     accumRef.current = 0;
@@ -420,6 +438,7 @@ export default function SimulationCanvas() {
     // Mark prior milestone one-shot guards as already triggered so seek does not replay historical sounds
     sounds.markGuardsForMilestone(milestoneId);
 
+    trajectoryPathRef.current = createTrajectoryPath();
     jumpToMilestone(simStateRef.current, milestoneId);
     simStateRef.current.timeScale = timeScale;
     simStateRef.current.running = true;
@@ -646,6 +665,37 @@ export default function SimulationCanvas() {
       {/* ── Cinematic HUD Event Toast ── */}
       <EventToast activeMilestone={activeMilestone} />
 
+      {separationLabel && (
+        <div
+          role="status"
+          aria-live="polite"
+          style={{
+            position: 'absolute',
+            top: '142px',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 41,
+            pointerEvents: 'none',
+          }}
+        >
+          <div
+            className="hud-panel"
+            style={{
+              padding: '7px 14px',
+              color: '#fff',
+              border: '1px solid rgba(255, 140, 0, 0.7)',
+              background: 'rgba(10, 14, 26, 0.9)',
+              fontSize: '11px',
+              fontWeight: 800,
+              fontFamily: 'var(--font-mono)',
+              textAlign: 'center',
+            }}
+          >
+            {separationLabel}
+          </div>
+        </div>
+      )}
+
       {/* ── Flight Director Mission Control HUD ── */}
       <FlightDirectorHUD
         simStateRef={simStateRef}
@@ -671,6 +721,11 @@ export default function SimulationCanvas() {
         onTogglePresentationMode={() => setIsPresentationMode((p) => !p)}
         onToggleTRN={() => setTrnOpen(!trnOpen)}
         onToggleGraphs={() => setGraphsOpen(!graphsOpen)}
+        trajectoryVisible={trajectoryVisible}
+        onToggleTrajectory={() => setTrajectoryVisible((visible) => !visible)}
+        roverInspectionOpen={roverInspectionOpen}
+        onToggleRoverInspection={() => setRoverInspectionOpen((open) => !open)}
+        onCloseRoverInspection={() => setRoverInspectionOpen(false)}
         onOpenInfo={() => setIntroOpen(true)}
         trnOpen={trnOpen}
         graphsOpen={graphsOpen}
@@ -681,14 +736,16 @@ export default function SimulationCanvas() {
       {/* ── Floating 3D Spatial World Labels ── */}
       <WorldLabels simStateRef={simStateRef} cameraRef={cameraRef} />
 
-      {/* ── Rover Inspection HUD (visible when landed or FREE camera) ── */}
-      {(cameraMode === 'FREE' || cameraMode === 'GROUND_TOUCHDOWN') && (
+      {/* ── Rover Inspection Panel ── */}
+      {roverInspectionOpen && (
         <div
+          id="rover-inspection-panel"
           className="hud-panel"
           style={{
             position: 'absolute',
-            bottom: '96px',
-            right: '18px',
+            top: '50%',
+            right: '72px',
+            transform: 'translateY(-50%)',
             background: 'rgba(10,14,26,0.88)',
             border: '1px solid rgba(255,140,0,0.35)',
             borderRadius: '8px',
@@ -696,8 +753,10 @@ export default function SimulationCanvas() {
             color: '#e2e8f0',
             fontSize: '12px',
             fontFamily: 'monospace',
-            zIndex: 120,
-            minWidth: '200px',
+            zIndex: 24,
+            width: 'min(270px, calc(100vw - 190px))',
+            maxHeight: 'calc(100vh - 220px)',
+            overflowY: 'auto',
             backdropFilter: 'blur(6px)',
             userSelect: 'none',
           }}
@@ -858,6 +917,8 @@ export default function SimulationCanvas() {
         <Lander
           simStateRef={simStateRef}
           accumRef={accumRef}
+          trajectoryPathRef={trajectoryPathRef}
+          onSeparationLabel={handleSeparationLabel}
           viewMode={roverViewMode}
           explodedFactor={explodedFactor}
           selectedComponent={selectedComponent}
@@ -867,7 +928,11 @@ export default function SimulationCanvas() {
         <SceneLighting simStateRef={simStateRef} accumRef={accumRef} />
         <StarField />
         <MarsGlobe simStateRef={simStateRef} />
-        <OrbitalTrajectory simStateRef={simStateRef} />
+        <OrbitalTrajectory
+          simStateRef={simStateRef}
+          trajectoryPathRef={trajectoryPathRef}
+          visible={trajectoryVisible}
+        />
         <MarsSurface simStateRef={simStateRef} />
         <LandingSiteGrid simStateRef={simStateRef} />
         <MartianDustFX simStateRef={simStateRef} />

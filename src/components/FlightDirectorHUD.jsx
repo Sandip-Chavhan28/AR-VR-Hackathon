@@ -108,6 +108,11 @@ export default function FlightDirectorHUD({
   onToggleMode,
   onToggleTRN,
   onToggleGraphs,
+  trajectoryVisible = true,
+  onToggleTrajectory,
+  roverInspectionOpen = false,
+  onToggleRoverInspection,
+  onCloseRoverInspection,
   onOpenInfo,
   trnOpen,
   graphsOpen,
@@ -715,7 +720,11 @@ export default function FlightDirectorHUD({
 
         {/* Technical Telemetry Drawer Toggle */}
         <button
-          onClick={() => setTelemetryDrawerOpen(!telemetryDrawerOpen)}
+          onClick={() => {
+            const opening = !telemetryDrawerOpen;
+            setTelemetryDrawerOpen(opening);
+            if (opening) onCloseRoverInspection?.();
+          }}
           title="Toggle Deep Technical Telemetry Drawer"
           className="hud-ctrl-btn"
           style={{
@@ -725,6 +734,58 @@ export default function FlightDirectorHUD({
           }}
         >
           📊
+        </button>
+
+        {/* Rover Inspection panel toggle */}
+        <button
+          onClick={() => {
+            if (!roverInspectionOpen) setTelemetryDrawerOpen(false);
+            onToggleRoverInspection?.();
+          }}
+          title="Open or close Rover Inspection"
+          aria-label="Rover Inspection"
+          aria-expanded={roverInspectionOpen}
+          aria-controls="rover-inspection-panel"
+          className="hud-ctrl-btn"
+          style={{
+            ...rightBtnStyle,
+            width: '40px',
+            padding: '2px',
+            flexDirection: 'column',
+            gap: 0,
+            fontSize: '5px',
+            lineHeight: '5px',
+            fontWeight: 800,
+            color: roverInspectionOpen ? '#ff8c00' : '#cbd5e1',
+            border: roverInspectionOpen ? '1px solid #ff8c00' : '1px solid rgba(255, 140, 0, 0.35)',
+            background: roverInspectionOpen ? 'rgba(255, 140, 0, 0.15)' : 'rgba(5, 10, 20, 0.8)',
+          }}
+        >
+          <span aria-hidden="true" style={{ fontSize: '8px', lineHeight: '9px' }}>🔭</span>
+          <span>ROVER</span>
+          <span>INSPECTION</span>
+        </button>
+
+        {/* Trajectory path visibility only; path collection remains active. */}
+        <button
+          onClick={onToggleTrajectory}
+          title={`Trajectory line ${trajectoryVisible ? 'ON' : 'OFF'} (toggle visibility)`}
+          aria-label={`Trajectory line ${trajectoryVisible ? 'on' : 'off'}`}
+          aria-pressed={trajectoryVisible}
+          className="hud-ctrl-btn"
+          style={{
+            ...rightBtnStyle,
+            width: '40px',
+            flexDirection: 'column',
+            gap: '1px',
+            fontSize: '8px',
+            fontWeight: 800,
+            color: trajectoryVisible ? '#00e5ff' : '#94a3b8',
+            border: trajectoryVisible ? '1px solid #00e5ff' : rightBtnStyle.border,
+          }}
+        >
+          <span>PATH</span>
+          <span style={{ fontSize: '6px' }}>{trajectoryVisible ? 'ON' : 'OFF'}</span>
         </button>
 
         {/* Mode: Demo vs Realistic */}
@@ -1036,7 +1097,7 @@ export default function FlightDirectorHUD({
 }
 
 const rightBtnStyle = {
-  width: '32px',
+  width: '40px',
   height: '32px',
   background: 'rgba(5, 10, 20, 0.8)',
   border: '1px solid rgba(255, 255, 255, 0.15)',
